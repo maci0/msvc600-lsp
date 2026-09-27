@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.MAX_OUTPUT_BYTES = exports.COMPILE_TIMEOUT_MS = exports.MAX_CONCURRENT_CHECKS = void 0;
+exports.MAX_CONCURRENT_CHECKS = void 0;
 exports.buildArgs = buildArgs;
 exports.syntaxCheck = syntaxCheck;
 exports.syntaxCheckContent = syntaxCheckContent;
@@ -54,10 +54,6 @@ const tempfile_1 = require("./tempfile");
  * bounded number of children.
  */
 exports.MAX_CONCURRENT_CHECKS = 2;
-/** Wall-clock limit for one CL.EXE run before the process is killed. */
-exports.COMPILE_TIMEOUT_MS = 30000;
-/** Cap on captured stdout and stderr, per stream. */
-exports.MAX_OUTPUT_BYTES = 1024 * 1024;
 /**
  * Builds the CL.EXE argument list for a syntax-only check.
  * Selects /TC (C) or /TP (C++) based on file extension.

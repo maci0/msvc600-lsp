@@ -10,6 +10,19 @@ export declare const C_EXTENSIONS: readonly string[];
 export declare const CPP_EXTENSIONS: readonly string[];
 export declare const ALL_EXTENSIONS: readonly string[];
 /**
+ * Suffix a scratch source is staged under, one per CL.EXE language mode. The
+ * staged suffix, not the document's, is what `buildArgs` reads, so it decides
+ * whether the check runs under `/TC` or `/TP`.
+ */
+export declare const C_SCRATCH_EXTENSION = ".c";
+export declare const CPP_SCRATCH_EXTENSION = ".cpp";
+/**
+ * Every suffix a scratch source can carry. The stale-file sweep filters on this
+ * list, so a scratch file staged under a suffix missing here would never be
+ * reclaimed after a crash.
+ */
+export declare const SCRATCH_EXTENSIONS: readonly string[];
+/**
  * Configuration for the MSVC 6.0 LSP server.
  *
  * On Linux/macOS the server invokes CL.EXE through Wine.

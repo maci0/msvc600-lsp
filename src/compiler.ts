@@ -22,12 +22,6 @@ import { createSystemTempFileStore, TempFileStore } from './tempfile';
  */
 export const MAX_CONCURRENT_CHECKS = 2;
 
-/** Wall-clock limit for one CL.EXE run before the process is killed. */
-export const COMPILE_TIMEOUT_MS = 30000;
-
-/** Cap on captured stdout and stderr, per stream. */
-export const MAX_OUTPUT_BYTES = 1024 * 1024;
-
 /** Result of a CL.EXE syntax-check invocation. */
 export interface CompileResult {
   stdout: string;

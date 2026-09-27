@@ -39,15 +39,15 @@ exports.scheduleValidation = scheduleValidation;
 const node_1 = require("vscode-languageserver/node");
 const vscode_languageserver_textdocument_1 = require("vscode-languageserver-textdocument");
 const vscode_uri_1 = require("vscode-uri");
-const path = __importStar(require("path"));
 const fs = __importStar(require("fs"));
+const path = __importStar(require("path"));
 const config_1 = require("./config");
 const compiler_1 = require("./compiler");
 const tempfile_1 = require("./tempfile");
 const diagnostics_1 = require("./diagnostics");
 const logging_1 = require("./logging");
 const validation_state_1 = require("./validation-state");
-const scheduler_1 = require("./scheduler");
+const debounce_1 = require("./debounce");
 const task_queue_1 = require("./task-queue");
 const cli_1 = require("./cli");
 // Before anything else: --help, --version, and a bad flag must not reach the
@@ -70,12 +70,18 @@ let hasConfigurationCapability = false;
 const validationSequencer = new validation_state_1.ValidationSequencer();
 /** Coalesces edit bursts into one check per document. */
 const DEBOUNCE_MS = 300;
-const validationDebouncer = (0, scheduler_1.createDebouncer)(scheduler_1.realScheduler, DEBOUNCE_MS);
+const validationDebouncer = (0, debounce_1.createDebouncer)(DEBOUNCE_MS);
 /**
  * Validation tasks, one per document URI. A new task for a URI aborts the
  * previous one, so a superseded edit never reaches the compiler.
  */
 const validationQueue = new task_queue_1.TaskQueue(compiler_1.MAX_CONCURRENT_CHECKS, (e) => logValidationError('Validation task rejected', e));
+/**
+ * Filesystem boundary for scratch sources. One store for the process, so a
+ * check stages through the same object that later removes the file and the
+ * write and the cleanup cannot drift apart.
+ */
+const scratchSources = (0, tempfile_1.createSystemTempFileStore)();
 /** Diagnostic code used for failures of the check itself, not of the source file. */
 const TOOL_ERROR_CODE = 'msvc600-check-failed';
 /** Range covering a whole first line, where tool-failure diagnostics are anchored. */
@@ -113,8 +119,8 @@ function warnAboutMissingExecutables(config) {
  * source. A rejection raised by `syntaxCheck` carries no errno, while the
  * filesystem failures that abort the write do.
  */
-function isCheckFailure(e) {
-    return !(e instanceof Error && 'code' in e);
+function isStagingFailure(e) {
+    return e instanceof Error && 'code' in e;
 }
 /** Whether a filesystem error means the path was already gone. */
 function isMissingFile(e) {
@@ -293,7 +299,9 @@ function scheduleValidation(textDocument) {
     }
     const uri = textDocument.uri;
     const handle = validationSequencer.begin(uri);
-    const ext = config_1.CPP_EXTENSIONS.includes(documentExt) || textDocument.languageId === 'cpp' ? '.cpp' : '.c';
+    const ext = config_1.CPP_EXTENSIONS.includes(documentExt) || textDocument.languageId === 'cpp'
+        ? config_1.CPP_SCRATCH_EXTENSION
+        : config_1.C_SCRATCH_EXTENSION;
     // Content is snapshotted at submission so a queued check never re-reads a
     // document that has since changed.
     const content = textDocument.getText();
@@ -305,7 +313,7 @@ async function runValidation(uri, handle, content, ext, signal) {
         // A newer edit aborted this one while it sat in the queue.
         if (signal.aborted)
             return;
-        tempFile = (0, tempfile_1.createTempSource)(content, ext);
+        tempFile = scratchSources.write(content, ext);
         const result = await (0, compiler_1.syntaxCheck)(config, tempFile, { signal });
         if (!handle.isCurrent())
             return;
@@ -349,7 +357,7 @@ async function runValidation(uri, handle, content, ext, signal) {
             connection.sendDiagnostics({ uri, diagnostics: [tooLargeDiagnostic(e)] });
             return;
         }
-        if (isCheckFailure(e)) {
+        if (!isStagingFailure(e)) {
             publishCheckFailure(uri, `Could not run the MSVC6 syntax check: ${errorMessage(e)}`);
             return;
         }

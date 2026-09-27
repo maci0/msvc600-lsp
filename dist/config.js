@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ENV_NAMES = exports.ENV_PREFIX = exports.RUNTIME_KEYS = exports.DEFAULT_MAX_OUTPUT_BYTES = exports.DEFAULT_CHECK_TIMEOUT_MS = exports.DEFAULT_WINE_EXECUTABLE = exports.DEFAULT_WARN_LEVEL = exports.DEFAULT_OUTPUT_ENCODING = exports.ALL_EXTENSIONS = exports.CPP_EXTENSIONS = exports.C_EXTENSIONS = void 0;
+exports.ENV_NAMES = exports.ENV_PREFIX = exports.RUNTIME_KEYS = exports.DEFAULT_MAX_OUTPUT_BYTES = exports.DEFAULT_CHECK_TIMEOUT_MS = exports.DEFAULT_WINE_EXECUTABLE = exports.DEFAULT_WARN_LEVEL = exports.DEFAULT_OUTPUT_ENCODING = exports.SCRATCH_EXTENSIONS = exports.CPP_SCRATCH_EXTENSION = exports.C_SCRATCH_EXTENSION = exports.ALL_EXTENSIONS = exports.CPP_EXTENSIONS = exports.C_EXTENSIONS = void 0;
 exports.defaultIncludePaths = defaultIncludePaths;
 exports.defaultConfig = defaultConfig;
 exports.validateConfig = validateConfig;
@@ -53,6 +53,19 @@ const wine_path_1 = require("./wine-path");
 exports.C_EXTENSIONS = ['.c'];
 exports.CPP_EXTENSIONS = ['.cpp', '.cxx', '.cc', '.hpp', '.hxx'];
 exports.ALL_EXTENSIONS = [...exports.C_EXTENSIONS, ...exports.CPP_EXTENSIONS, '.h'];
+/**
+ * Suffix a scratch source is staged under, one per CL.EXE language mode. The
+ * staged suffix, not the document's, is what `buildArgs` reads, so it decides
+ * whether the check runs under `/TC` or `/TP`.
+ */
+exports.C_SCRATCH_EXTENSION = '.c';
+exports.CPP_SCRATCH_EXTENSION = '.cpp';
+/**
+ * Every suffix a scratch source can carry. The stale-file sweep filters on this
+ * list, so a scratch file staged under a suffix missing here would never be
+ * reclaimed after a crash.
+ */
+exports.SCRATCH_EXTENSIONS = [exports.C_SCRATCH_EXTENSION, exports.CPP_SCRATCH_EXTENSION];
 /** CL.EXE diagnostics are ASCII-safe under Wine's UTF-8 console by default. */
 exports.DEFAULT_OUTPUT_ENCODING = 'utf8';
 /** Most verbose warning level; MSVC6 has no higher one to ask for. */

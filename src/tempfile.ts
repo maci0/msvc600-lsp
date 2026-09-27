@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { encodeSourceText } from './encoding';
+import { SCRATCH_EXTENSIONS } from './config';
 
 /** Prefix shared by every temp file the server creates, so leaked files are identifiable. */
 const TEMP_PREFIX = 'msvc6_lsp_';
@@ -12,9 +13,6 @@ const TEMP_FILE_MODE = 0o600;
 
 /** Digits in the simulated store's sequence-derived file names. */
 const SIMULATED_NAME_DIGITS = 6;
-
-/** Suffixes a scratch source may carry. */
-const SOURCE_EXTENSIONS: readonly string[] = ['.c', '.cpp'];
 
 /**
  * Age at which a scratch file is treated as orphaned by a crashed run. Above
@@ -241,7 +239,7 @@ export function sweepStaleTempFiles(opts: SweepOptions = {}): string[] {
 
   for (const entry of fs.readdirSync(os.tmpdir())) {
     if (!entry.startsWith(TEMP_PREFIX)) continue;
-    if (!SOURCE_EXTENSIONS.some((ext) => entry.endsWith(ext))) continue;
+    if (!SCRATCH_EXTENSIONS.some((ext) => entry.endsWith(ext))) continue;
 
     const file = path.join(os.tmpdir(), entry);
     let stats: fs.Stats;

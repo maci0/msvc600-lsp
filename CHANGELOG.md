@@ -70,6 +70,20 @@ package version, not a published artifact.
 - A validation task that rejects is reported instead of being swallowed, and a scratch source
   that could not be unlinked is logged with its path, so a failed cleanup is not a silent
   leak of the unsaved buffer.
+- `src/server.ts` imported `createDebouncer` from a `scheduler.ts` a refactor had deleted, so
+  the type check failed and `dist/server.js` could not be built. The debounce now lives in
+  `src/debounce.ts` as the keyed, timer-backed unit the server actually uses; the scheduler
+  interface and its manual test double are gone with it.
+- The server wrote each scratch source through one temp-file path and deleted it with a second,
+  its own `unlink` in a try/catch. Both go through the process-wide `TempFileStore` now, so the
+  exclusive create, the `0600` mode, and the removal are one policy instead of two.
+
+### Changed
+
+- The suffixes a scratch source may carry are declared once in `config.ts` and used by both the
+  server and the stale-file sweep. The sweep filtered on its own copy of the list, so a scratch
+  file staged under a suffix the copy lacked would have survived every later run, holding an
+  unsaved editor buffer in the temp directory.
 
 ## [0.1.0] - 2026-09-27
 

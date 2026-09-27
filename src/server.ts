@@ -12,8 +12,8 @@ import {
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { URI } from 'vscode-uri';
-import * as path from 'path';
 import * as fs from 'fs';
+import * as path from 'path';
 import {
   Msvc6Config,
   defaultConfig,
@@ -25,13 +25,15 @@ import {
   runtimeConfigUpdate,
   ALL_EXTENSIONS,
   CPP_EXTENSIONS,
+  C_SCRATCH_EXTENSION,
+  CPP_SCRATCH_EXTENSION,
 } from './config';
 import {
   syntaxCheck,
   MAX_CONCURRENT_CHECKS,
 } from './compiler';
 import {
-  createTempSource,
+  createSystemTempFileStore,
   staleTempMinAgeMs,
   sweepStaleTempFiles,
   DocumentTooLargeError,
@@ -39,7 +41,7 @@ import {
 import { parseDiagnostics, toLspDiagnostics, toFailureDiagnostic, LSP_UINT_MAX } from './diagnostics';
 import { sanitizeForLog } from './logging';
 import { ValidationSequencer, ValidationHandle } from './validation-state';
-import { createDebouncer, realScheduler } from './scheduler';
+import { createDebouncer } from './debounce';
 import { TaskQueue } from './task-queue';
 import { runCli } from './cli';
 
@@ -68,7 +70,7 @@ const validationSequencer = new ValidationSequencer();
 /** Coalesces edit bursts into one check per document. */
 const DEBOUNCE_MS = 300;
 
-const validationDebouncer = createDebouncer(realScheduler, DEBOUNCE_MS);
+const validationDebouncer = createDebouncer(DEBOUNCE_MS);
 
 /**
  * Validation tasks, one per document URI. A new task for a URI aborts the
@@ -77,6 +79,13 @@ const validationDebouncer = createDebouncer(realScheduler, DEBOUNCE_MS);
 const validationQueue = new TaskQueue(MAX_CONCURRENT_CHECKS, (e) =>
   logValidationError('Validation task rejected', e),
 );
+
+/**
+ * Filesystem boundary for scratch sources. One store for the process, so a
+ * check stages through the same object that later removes the file and the
+ * write and the cleanup cannot drift apart.
+ */
+const scratchSources = createSystemTempFileStore();
 
 /** Diagnostic code used for failures of the check itself, not of the source file. */
 const TOOL_ERROR_CODE = 'msvc600-check-failed';
@@ -126,8 +135,8 @@ function warnAboutMissingExecutables(config: Msvc6Config): string[] {
  * source. A rejection raised by `syntaxCheck` carries no errno, while the
  * filesystem failures that abort the write do.
  */
-function isCheckFailure(e: unknown): boolean {
-  return !(e instanceof Error && 'code' in e);
+function isStagingFailure(e: unknown): boolean {
+  return e instanceof Error && 'code' in e;
 }
 
 /** Whether a filesystem error means the path was already gone. */
@@ -345,7 +354,9 @@ function scheduleValidation(textDocument: TextDocument): void {
   const handle = validationSequencer.begin(uri);
 
   const ext =
-    CPP_EXTENSIONS.includes(documentExt) || textDocument.languageId === 'cpp' ? '.cpp' : '.c';
+    CPP_EXTENSIONS.includes(documentExt) || textDocument.languageId === 'cpp'
+      ? CPP_SCRATCH_EXTENSION
+      : C_SCRATCH_EXTENSION;
 
   // Content is snapshotted at submission so a queued check never re-reads a
   // document that has since changed.
@@ -366,7 +377,7 @@ async function runValidation(
     // A newer edit aborted this one while it sat in the queue.
     if (signal.aborted) return;
 
-    tempFile = createTempSource(content, ext);
+    tempFile = scratchSources.write(content, ext);
 
     const result = await syntaxCheck(config, tempFile, { signal });
 
@@ -437,7 +448,7 @@ async function runValidation(
       return;
     }
 
-    if (isCheckFailure(e)) {
+    if (!isStagingFailure(e)) {
       publishCheckFailure(uri, `Could not run the MSVC6 syntax check: ${errorMessage(e)}`);
       return;
     }

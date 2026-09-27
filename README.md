@@ -157,6 +157,7 @@ src/
 ├── compiler.ts          # CL.EXE invocation (syntax-check mode)
 ├── concurrency.ts       # Counting semaphore bounding CL.EXE children
 ├── config.ts            # Configuration types and validation
+├── debounce.ts          # Keyed debounce coalescing edit bursts into one check
 ├── diagnostics.ts       # MSVC output parser → LSP Diagnostic conversion
 ├── encoding.ts          # Source preparation: BOM strip, lone surrogates, UTF-8 bytes
 ├── logging.ts           # Control-character stripping for the client log
