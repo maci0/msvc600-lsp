@@ -1,0 +1,4 @@
+# The LSP server is developed on Windows, macOS and Linux and ships a bash
+# setup script plus TypeScript sources, all of which require LF. `text=auto`
+# leaves the binary MSVC6 install under VC/ untouched.
+* text=auto eol=lf
