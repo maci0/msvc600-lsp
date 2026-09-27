@@ -16,6 +16,17 @@ const CONTINUATION_INDENT = /^(?: {8,}|\t)/;
 /** LSP `uinteger` max value (2^31 - 1), used for "end of line" positions. */
 exports.LSP_UINT_MAX = 2147483647;
 /**
+ * Coerces any number into the LSP `uinteger` range. `NaN` and `-Infinity`
+ * collapse to 0, `+Infinity` to the ceiling: a `ParsedDiagnostic` built by a
+ * programmatic consumer carries whatever number it likes, and a non-integer
+ * position serializes as `null` and is rejected by the client.
+ */
+function toUinteger(value) {
+    if (!Number.isFinite(value))
+        return value > 0 ? exports.LSP_UINT_MAX : 0;
+    return Math.min(exports.LSP_UINT_MAX, Math.max(0, Math.floor(value)));
+}
+/**
  * Parses raw CL.EXE stdout+stderr into structured diagnostics.
  *
  * Handles multi-line diagnostics where continuation lines (indented by at
@@ -101,7 +112,7 @@ function toLspDiagnostics(parsed, targetFile) {
         return normalized === target;
     })
         .map((d) => {
-        const line = Math.min(exports.LSP_UINT_MAX, Math.max(0, d.line - 1));
+        const line = toUinteger(d.line - 1);
         const range = {
             start: vscode_languageserver_protocol_1.Position.create(line, 0),
             end: vscode_languageserver_protocol_1.Position.create(line, exports.LSP_UINT_MAX),
@@ -124,11 +135,17 @@ function toLspDiagnostics(parsed, targetFile) {
  * not be spawned or the scratch source could not be written. Publishing an
  * empty list in that case would mark the document clean on the strength of
  * no result at all.
+ *
+ * `code` is carried only by the notes a client is expected to filter on, the
+ * `msvc600-check-failed` code; a note that completes a partial result (a
+ * truncated, cut-short, or unparseable run) describes that result and leaves
+ * the code off.
  */
-function toFailureDiagnostic(message) {
+function toFailureDiagnostic(message, code) {
     return {
         range: { start: vscode_languageserver_protocol_1.Position.create(0, 0), end: vscode_languageserver_protocol_1.Position.create(0, 0) },
         severity: vscode_languageserver_protocol_1.DiagnosticSeverity.Error,
+        ...(code === undefined ? {} : { code }),
         source: 'msvc6',
         message,
     };

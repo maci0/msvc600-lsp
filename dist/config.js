@@ -45,14 +45,16 @@ exports.formatIssues = formatIssues;
 const path = __importStar(require("path"));
 const wine_path_1 = require("./wine-path");
 const logging_1 = require("./logging");
-/**
- * Supported C/C++ file extensions for syntax checking.
- * Translation units (.c, .cpp, .cxx, .cc) are compiled directly.
- * Headers (.h, .hpp, .hxx) are supported but may produce false positives
- * when compiled as standalone translation units.
- */
+/** Translation units CL.EXE is told to treat as C (`/TC`). */
 exports.C_EXTENSIONS = ['.c'];
+/**
+ * Extensions treated as C++ (`/TP`): the translation units plus the headers
+ * that name their own language. A header compiled as a standalone translation
+ * unit may report errors a real build would not, since the `.c` file that
+ * supplies its include guards is not part of the check.
+ */
 exports.CPP_EXTENSIONS = ['.cpp', '.cxx', '.cc', '.hpp', '.hxx'];
+/** Every extension the server checks; `.h` is included but gets no language flag. */
 exports.ALL_EXTENSIONS = [...exports.C_EXTENSIONS, ...exports.CPP_EXTENSIONS, '.h'];
 /**
  * Suffix a scratch source is staged under, one per CL.EXE language mode. The

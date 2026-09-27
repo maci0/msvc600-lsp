@@ -84,11 +84,6 @@ const validationQueue = new task_queue_1.TaskQueue(compiler_1.MAX_CONCURRENT_CHE
 const scratchSources = (0, tempfile_1.createSystemTempFileStore)();
 /** Diagnostic code used for failures of the check itself, not of the source file. */
 const TOOL_ERROR_CODE = 'msvc600-check-failed';
-/** Range covering a whole first line, where tool-failure diagnostics are anchored. */
-const DOCUMENT_START = {
-    start: { line: 0, character: 0 },
-    end: { line: 0, character: 0 },
-};
 /** Reports a caught error to the client log with control characters removed. */
 function logValidationError(context, e) {
     connection.console.error((0, logging_1.sanitizeForLog)(`${context}: ${String(e)}`));
@@ -137,15 +132,7 @@ function publishCheckFailure(uri, message) {
     connection.console.error((0, logging_1.sanitizeForLog)(`MSVC6 syntax check failed for ${uri}: ${message}`));
     connection.sendDiagnostics({
         uri,
-        diagnostics: [
-            {
-                range: DOCUMENT_START,
-                severity: node_1.DiagnosticSeverity.Error,
-                code: TOOL_ERROR_CODE,
-                source: 'msvc6',
-                message,
-            },
-        ],
+        diagnostics: [(0, diagnostics_1.toFailureDiagnostic)(message, TOOL_ERROR_CODE)],
     });
 }
 connection.onInitialize((params) => {
@@ -383,7 +370,9 @@ async function runValidation(uri, handle, content, ext, signal) {
         // to this run and not evidence that the file is clean.
         connection.sendDiagnostics({
             uri,
-            diagnostics: [(0, diagnostics_1.toFailureDiagnostic)(`Syntax check failed: ${errorMessage(e)}`)],
+            diagnostics: [
+                (0, diagnostics_1.toFailureDiagnostic)(`Syntax check failed: ${errorMessage(e)}`, TOOL_ERROR_CODE),
+            ],
         });
         logValidationError(`Validation error (${uri})`, e);
     }

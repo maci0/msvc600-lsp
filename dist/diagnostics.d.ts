@@ -28,6 +28,11 @@ export declare function toLspDiagnostics(parsed: ParsedDiagnostic[], targetFile:
  * not be spawned or the scratch source could not be written. Publishing an
  * empty list in that case would mark the document clean on the strength of
  * no result at all.
+ *
+ * `code` is carried only by the notes a client is expected to filter on, the
+ * `msvc600-check-failed` code; a note that completes a partial result (a
+ * truncated, cut-short, or unparseable run) describes that result and leaves
+ * the code off.
  */
-export declare function toFailureDiagnostic(message: string): Diagnostic;
+export declare function toFailureDiagnostic(message: string, code?: string): Diagnostic;
 //# sourceMappingURL=diagnostics.d.ts.map
