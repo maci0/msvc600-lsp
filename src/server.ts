@@ -218,9 +218,10 @@ async function runValidation(
   tempFile: string,
   signal: AbortSignal,
 ): Promise<void> {
-  if (signal.aborted) return;
-
   try {
+    // A newer edit aborted this one while it sat in the queue.
+    if (signal.aborted) return;
+
     fs.writeFileSync(tempFile, stripByteOrderMark(content), {
       encoding: 'utf-8',
       mode: 0o600,
@@ -231,9 +232,7 @@ async function runValidation(
     if (!handle.isCurrent()) return;
 
     const parsed = parseDiagnostics(result.rawOutput);
-    const diagnostics = toLspDiagnostics(parsed, tempFile);
-
-    connection.sendDiagnostics({ uri, diagnostics });
+    connection.sendDiagnostics({ uri, diagnostics: toLspDiagnostics(parsed, tempFile) });
   } catch (e) {
     if (signal.aborted) return;
     if (handle.isCurrent()) {

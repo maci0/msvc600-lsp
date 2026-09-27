@@ -58,12 +58,15 @@ export function parseDiagnostics(output: string): ParsedDiagnostic[] {
         message,
         relatedInfo: [],
       };
-    } else if (current && CONTINUATION_INDENT.test(line)) {
-      current.relatedInfo.push(line.trim());
-    } else if (line.trim() === '') {
-      if (current) {
-        diagnostics.push(current);
-        current = null;
+    } else {
+      const trimmed = line.trim();
+      if (current && CONTINUATION_INDENT.test(line)) {
+        current.relatedInfo.push(trimmed);
+      } else if (trimmed === '') {
+        if (current) {
+          diagnostics.push(current);
+          current = null;
+        }
       }
     }
   }
@@ -93,8 +96,9 @@ export function toLspDiagnostics(
   parsed: ParsedDiagnostic[],
   targetFile: string,
 ): Diagnostic[] {
+  const target = normalizeForComparison(targetFile);
   return parsed
-    .filter((d) => normalizeForComparison(d.file) === normalizeForComparison(targetFile))
+    .filter((d) => normalizeForComparison(d.file) === target)
     .map((d) => {
       const line = Math.min(LSP_UINT_MAX, Math.max(0, d.line - 1));
       const range: Range = {
