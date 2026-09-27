@@ -6,6 +6,19 @@ import * as path from 'path';
 import { Msvc6Config, CPP_EXTENSIONS, C_EXTENSIONS } from './config';
 import { toWinePath } from './wine-path';
 
+/** Scratch sources are named with this prefix so a crashed run leaves identifiable leftovers. */
+const TEMP_SOURCE_PREFIX = 'msvc6_lsp_';
+
+/** Suffixes a scratch source may carry. */
+const TEMP_SOURCE_EXTENSIONS: readonly string[] = ['.c', '.cpp'];
+
+/**
+ * Age at which a scratch file is treated as orphaned by a crashed run. Well
+ * above the 30s check timeout, so a file in flight inside another server
+ * process is never removed.
+ */
+const STALE_TEMP_MIN_AGE_MS = 60 * 60 * 1000;
+
 /** Result of a CL.EXE syntax-check invocation. */
 export interface CompileResult {
   stdout: string;
@@ -136,6 +149,52 @@ export function syntaxCheck(
 }
 
 /**
+ * Returns a fresh, unused path for a scratch source file. The random name
+ * makes two concurrent checks of the same document independent rather than
+ * overwriting each other's input.
+ */
+export function createTempSourcePath(languageId: string): string {
+  const ext = languageId === 'cpp' ? '.cpp' : '.c';
+  return path.join(os.tmpdir(), `${TEMP_SOURCE_PREFIX}${randomUUID()}${ext}`);
+}
+
+/**
+ * Deletes scratch sources left behind by a run that was killed before its
+ * cleanup, and returns the paths removed. A server that is restarted after a
+ * crash otherwise accumulates one orphaned file per interrupted check, and no
+ * later run ever reclaims them. Removing only files older than
+ * {@link STALE_TEMP_MIN_AGE_MS} keeps this safe alongside a concurrently
+ * running server; running it twice in a row removes nothing the second time.
+ */
+export function sweepStaleTempFiles(now: number = Date.now()): string[] {
+  const removed: string[] = [];
+
+  for (const entry of fs.readdirSync(os.tmpdir())) {
+    if (!entry.startsWith(TEMP_SOURCE_PREFIX)) continue;
+    if (!TEMP_SOURCE_EXTENSIONS.some((ext) => entry.endsWith(ext))) continue;
+
+    const file = path.join(os.tmpdir(), entry);
+    let stats: fs.Stats;
+    try {
+      stats = fs.lstatSync(file);
+    } catch {
+      continue; // Vanished between listing and stat.
+    }
+    if (!stats.isFile()) continue;
+    if (now - stats.mtimeMs < STALE_TEMP_MIN_AGE_MS) continue;
+
+    try {
+      fs.unlinkSync(file);
+      removed.push(file);
+    } catch {
+      // Another process removed it first, or it is not ours to delete.
+    }
+  }
+
+  return removed;
+}
+
+/**
  * Drops a leading U+FEFF. Editors hand buffers over with a UTF-8 BOM intact,
  * and MSVC6 lexes those three bytes as source, reporting an error on the
  * first declaration of an otherwise valid file.
@@ -156,8 +215,7 @@ export async function syntaxCheckContent(
   content: string,
   languageId: string,
 ): Promise<CompileResult & { tempFile: string }> {
-  const ext = languageId === 'cpp' ? '.cpp' : '.c';
-  const tempFile = path.join(os.tmpdir(), `msvc6_lsp_${randomUUID()}${ext}`);
+  const tempFile = createTempSourcePath(languageId);
 
   try {
     fs.writeFileSync(tempFile, stripByteOrderMark(content), {

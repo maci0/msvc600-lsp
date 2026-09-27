@@ -120,6 +120,20 @@ export function validateConfig(raw: unknown): Partial<Msvc6Config> {
 }
 
 /**
+ * Compares the fields a runtime configuration change is allowed to replace
+ * (`includePaths`, `warnLevel`). A repeated notification carrying the same
+ * settings leaves the effective config unchanged, which is the signal to skip
+ * re-checking every open document.
+ */
+export function runtimeConfigEquals(a: Msvc6Config, b: Msvc6Config): boolean {
+  return (
+    a.warnLevel === b.warnLevel &&
+    a.includePaths.length === b.includePaths.length &&
+    a.includePaths.every((p, i) => p === b.includePaths[i])
+  );
+}
+
+/**
  * Whether `TextDecoder` knows this encoding label. An unknown label throws at
  * decode time, long after the user set it, so it is rejected at load instead.
  */

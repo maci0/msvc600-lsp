@@ -9,13 +9,24 @@ import {
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { URI } from 'vscode-uri';
-import { randomUUID } from 'crypto';
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
-import { Msvc6Config, defaultConfig, validateConfig, ALL_EXTENSIONS, CPP_EXTENSIONS } from './config';
-import { syntaxCheck, stripByteOrderMark } from './compiler';
+import {
+  Msvc6Config,
+  defaultConfig,
+  validateConfig,
+  runtimeConfigEquals,
+  ALL_EXTENSIONS,
+  CPP_EXTENSIONS,
+} from './config';
+import {
+  syntaxCheck,
+  stripByteOrderMark,
+  createTempSourcePath,
+  sweepStaleTempFiles,
+} from './compiler';
 import { parseDiagnostics, toLspDiagnostics } from './diagnostics';
+import { ValidationSequencer } from './validation-state';
 
 const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
@@ -23,8 +34,8 @@ const documents = new TextDocuments(TextDocument);
 let config: Msvc6Config = defaultConfig();
 let hasConfigurationCapability = false;
 
-/** Per-URI sequence counter — used to discard stale validation results. */
-const validationSeq = new Map<string, number>();
+/** Decides which validation result per URI is allowed to reach the client. */
+const validationSequencer = new ValidationSequencer();
 
 /** Per-URI abort controllers — cancels stale in-flight CL.EXE processes. */
 const validationAbort = new Map<string, AbortController>();
@@ -72,11 +83,16 @@ connection.onDidChangeConfiguration((change) => {
   // Runtime config changes are untrusted — only accept non-executable fields.
   // Notably, additionalFlags is excluded: arbitrary CL.EXE flags could write files
   // or alter behavior beyond syntax checking. Set additionalFlags via initializationOptions only.
+  const previous = config;
   config = {
     ...config,
     ...(validated.includePaths ? { includePaths: validated.includePaths } : {}),
     ...(validated.warnLevel !== undefined ? { warnLevel: validated.warnLevel } : {}),
   };
+
+  // A client may re-send the settings it already holds. Re-checking every open
+  // document would spawn one CL.EXE per document for no change in the inputs.
+  if (runtimeConfigEquals(previous, config)) return;
 
   for (const t of pendingValidations.values()) clearTimeout(t);
   pendingValidations.clear();
@@ -133,7 +149,7 @@ documents.onDidClose((event) => {
     abort.abort();
     validationAbort.delete(uri);
   }
-  validationSeq.delete(uri);
+  validationSequencer.close(uri);
   connection.sendDiagnostics({ uri, diagnostics: [] });
 });
 
@@ -160,9 +176,7 @@ async function validateDocument(textDocument: TextDocument): Promise<void> {
   }
 
   const uri = textDocument.uri;
-  const prev = validationSeq.get(uri) ?? 0;
-  const seq = prev >= Number.MAX_SAFE_INTEGER ? 1 : prev + 1;
-  validationSeq.set(uri, seq);
+  const handle = validationSequencer.begin(uri);
 
   const previousAbort = validationAbort.get(uri);
   if (previousAbort) previousAbort.abort();
@@ -175,8 +189,7 @@ async function validateDocument(textDocument: TextDocument): Promise<void> {
     : textDocument.languageId === 'cpp'
       ? 'cpp'
       : 'c';
-  const tempExt = langId === 'cpp' ? '.cpp' : '.c';
-  const tempFile = path.join(os.tmpdir(), `msvc6_lsp_${randomUUID()}${tempExt}`);
+  const tempFile = createTempSourcePath(langId);
 
   try {
     fs.writeFileSync(tempFile, stripByteOrderMark(content), {
@@ -186,7 +199,7 @@ async function validateDocument(textDocument: TextDocument): Promise<void> {
 
     const result = await syntaxCheck(config, tempFile, { signal: abort.signal });
 
-    if (validationSeq.get(uri) !== seq) return;
+    if (!handle.isCurrent()) return;
 
     const parsed = parseDiagnostics(result.rawOutput);
     const diagnostics = toLspDiagnostics(parsed, tempFile);
@@ -194,7 +207,7 @@ async function validateDocument(textDocument: TextDocument): Promise<void> {
     connection.sendDiagnostics({ uri, diagnostics });
   } catch (e) {
     if (abort.signal.aborted) return;
-    if (validationSeq.get(uri) === seq) {
+    if (handle.isCurrent()) {
       connection.sendDiagnostics({ uri, diagnostics: [] });
     }
     throw e;
@@ -212,6 +225,14 @@ async function validateDocument(textDocument: TextDocument): Promise<void> {
 
 documents.listen(connection);
 connection.listen();
+
+// Reclaim scratch sources from a previous run that was killed before its
+// cleanup; without this every crash leaves one orphan behind forever.
+try {
+  sweepStaleTempFiles();
+} catch (e) {
+  connection.console.error(`Stale temp sweep failed: ${String(e)}`);
+}
 
 /** Returns the current live config — typed `Readonly` to prevent accidental mutation. */
 function getConfig(): Readonly<Msvc6Config> {

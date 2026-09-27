@@ -15,8 +15,8 @@ speak the stdio channel, and who controls the command line that reaches
 |---|--------|----------|--------|------------------|
 | 1 | Initialization options choose the executable and the flags | client to server (initializationOptions) | Arbitrary program execution and file writes as the editing user | None. Deliberate, but undocumented in README |
 | 2 | A hostile client sets `includePaths` to a directory it controls | server to CL.EXE | Header shadowing turns any open C/C++ file into attacker-chosen compile input | `validateConfig` type checks only (`src/config.ts:75-80`) |
-| 3 | `didChangeConfiguration` revalidates every open document, no concurrency cap | client to server | Process and memory exhaustion, editor stall | Debounce and abort per URI only (`src/server.ts:84-92`) |
-| 4 | Document text is written to a shared temp directory | server to filesystem | Source code exposure to other local users; temp leak on crash | `0o600` mode and random names (`src/server.ts:179-182`) |
+| 3 | `didChangeConfiguration` revalidates every open document, no concurrency cap | client to server | Process and memory exhaustion, editor stall | Debounce and abort per URI only (`src/server.ts:97-110`); a notification that changes nothing is a no-op (`src/server.ts:95`) |
+| 4 | Document text is written to a shared temp directory | server to filesystem | Source code exposure to other local users; temp leak on crash | `0o600` mode and random names (`src/server.ts:195-199`); orphans from a crashed run are swept at startup (`src/server.ts:232`) |
 | 5 | `CL.EXE` stdout is parsed with a regex and republished to the editor | compiler to editor | Malformed or hostile output reaching the UI; diagnostic spoofing | File-path filter to the temp file only (`src/diagnostics.ts:97`) |
 | 6 | The include overlay lowercases header names into `~/.wine` | setup script to filesystem | A header named `stdio.h` can be shadowed by a differently-cased one | None. `scripts/setup-includes.sh:23-49` |
 | 7 | No audit trail for security events | all | Incidents cannot be reconstructed | Errors only reach `connection.console.error` |
@@ -56,7 +56,7 @@ dependency surface is the four `vscode-languageserver*` packages and
 3. **Server to Wine.** On non-Windows the config-supplied `wineExecutable` is
    the program that is actually exec'd (`src/compiler.ts:88-89`).
 4. **Server to temp filesystem.** Full document text at `os.tmpdir()`
-   (`src/server.ts:179-182`).
+   (`src/server.ts:195-199`).
 5. **Compiler output to editor.** Compiled text is turned into diagnostics and
    shown in the editor (`src/diagnostics.ts:92`).
 6. **Setup script to `$HOME`.** `scripts/setup-includes.sh` copies binaries and
@@ -100,7 +100,8 @@ dependency surface is the four `vscode-languageserver*` packages and
 - *Information disclosure.* Temp files hold complete file contents. The name
   is a random UUID and the mode is `0o600`, which leaves only the shared
   directory listing and crash leftovers. A process killed between write and
-  unlink leaves the content behind; `os.tmpdir()` is not cleaned by the server.
+  unlink leaves the content behind; the startup sweep
+  (`sweepStaleTempFiles`) removes it once it is older than an hour.
 
 **Compiler output to editor**
 
@@ -128,13 +129,14 @@ Implemented:
 - Runtime configuration is restricted to `includePaths` and `warnLevel`;
   `additionalFlags` is rejected there: `src/server.ts:75-79`.
 - Type and range validation of every config field: `src/config.ts:74-120`.
-- Debounce and per-URI abort discard stale work: `src/server.ts:95-110`,
-  `src/server.ts:167-170`.
-- Per-URI sequence numbers stop an older result from overwriting a newer one:
-  `src/server.ts:163-186`.
-- Temp files are unlinked in a `finally` block: `src/server.ts:198-207`.
+- Debounce and per-URI abort discard stale work: `src/server.ts:113-126`,
+  `src/server.ts:182-185`.
+- Validation generations never repeat, so a result from before a close cannot
+  overwrite a newer one: `src/validation-state.ts`, `src/server.ts:179-202`.
+- Temp files are unlinked in a `finally` block: `src/server.ts:217-222`, and
+  leftovers from a killed run are removed at startup: `src/compiler.ts:168-194`.
 - Document extension is checked against an allowlist before any work is done:
-  `src/server.ts:157-160`.
+  `src/server.ts:174-176`.
 
 Not implemented, ranked by exploitability then impact:
 

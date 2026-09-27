@@ -80,8 +80,8 @@ src/
 
 **Key design decisions:**
 
-- **Temp files + abort controllers**: Each validation writes to a unique temp file and tracks an `AbortController`. New edits abort stale in-flight checks.
-- **Sequence numbers**: A per-URI counter discards results from stale validations that complete after a newer one started.
+- **Temp files + abort controllers**: Each validation writes to a unique temp file and tracks an `AbortController`. New edits abort stale in-flight checks, and a startup sweep removes scratch files left behind by a crashed run.
+- **Validation generations**: A process-wide counter hands each validation a number that is never reused. A result is published only while its number is still the newest one for its URI, so a check that finishes late, or one belonging to a document that was closed and reopened, is discarded.
 - **Security boundary**: Runtime config changes cannot touch `additionalFlags` or the executable paths, which are fixed at initialization. That limits a notification to include paths and warning level; it does not constrain what the client sends at startup.
 
 ## Supported File Types

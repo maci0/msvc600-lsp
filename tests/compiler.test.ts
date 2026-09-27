@@ -1,6 +1,15 @@
 import { describe, it, expect } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
-import { syntaxCheck, syntaxCheckContent, buildArgs, stripByteOrderMark } from '../src/compiler';
+import {
+  syntaxCheck,
+  syntaxCheckContent,
+  buildArgs,
+  stripByteOrderMark,
+  createTempSourcePath,
+  sweepStaleTempFiles,
+} from '../src/compiler';
 import { Msvc6Config } from '../src/config';
 import { CL_EXE, MSVC_ROOT, describeWithToolchain } from './helpers/toolchain';
 
@@ -280,5 +289,68 @@ describeWithToolchain('syntaxCheck — abort signal', () => {
     await expect(
       syntaxCheck(testConfig(), path.join(FIXTURES, 'valid.c'), { signal: abort.signal }),
     ).rejects.toThrow();
+  });
+});
+
+describe('createTempSourcePath', () => {
+  it('picks the extension from the language id', () => {
+    expect(path.basename(createTempSourcePath('cpp'))).toMatch(/^msvc6_lsp_.+\.cpp$/);
+    expect(path.basename(createTempSourcePath('c'))).toMatch(/^msvc6_lsp_.+\.c$/);
+  });
+
+  it('returns a different path on every call', () => {
+    expect(createTempSourcePath('c')).not.toBe(createTempSourcePath('c'));
+  });
+});
+
+describe('sweepStaleTempFiles', () => {
+  const HOUR_MS = 60 * 60 * 1000;
+
+  function makeTemp(name: string, ageMs: number): string {
+    const file = path.join(os.tmpdir(), name);
+    fs.writeFileSync(file, 'x');
+    const when = new Date(Date.now() - ageMs);
+    fs.utimesSync(file, when, when);
+    return file;
+  }
+
+  it('removes an orphaned scratch file and reports it', () => {
+    const file = makeTemp(`msvc6_lsp_orphan_${process.pid}.c`, 2 * HOUR_MS);
+    try {
+      expect(sweepStaleTempFiles()).toContain(file);
+      expect(fs.existsSync(file)).toBe(false);
+    } finally {
+      fs.rmSync(file, { force: true });
+    }
+  });
+
+  it('keeps a scratch file an in-flight check may still own', () => {
+    const file = makeTemp(`msvc6_lsp_live_${process.pid}.cpp`, 60 * 1000);
+    try {
+      expect(sweepStaleTempFiles()).not.toContain(file);
+      expect(fs.existsSync(file)).toBe(true);
+    } finally {
+      fs.rmSync(file, { force: true });
+    }
+  });
+
+  it('leaves files it did not create alone', () => {
+    const file = makeTemp(`unrelated_${process.pid}.c`, 2 * HOUR_MS);
+    try {
+      expect(sweepStaleTempFiles()).not.toContain(file);
+      expect(fs.existsSync(file)).toBe(true);
+    } finally {
+      fs.rmSync(file, { force: true });
+    }
+  });
+
+  it('is a no-op the second time over the same leftovers', () => {
+    const file = makeTemp(`msvc6_lsp_twice_${process.pid}.c`, 2 * HOUR_MS);
+    try {
+      expect(sweepStaleTempFiles()).toContain(file);
+      expect(sweepStaleTempFiles()).not.toContain(file);
+    } finally {
+      fs.rmSync(file, { force: true });
+    }
   });
 });

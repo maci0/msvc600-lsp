@@ -5,6 +5,7 @@ import {
   C_EXTENSIONS,
   CPP_EXTENSIONS,
   ALL_EXTENSIONS,
+  runtimeConfigEquals,
 } from '../src/config';
 import type { WarnLevel } from '../src/config';
 
@@ -194,5 +195,35 @@ describe('extension constants', () => {
       expect(ALL_EXTENSIONS).toContain(ext);
     }
     expect(ALL_EXTENSIONS).toContain('.h');
+  });
+});
+
+describe('runtimeConfigEquals', () => {
+  const base = defaultConfig();
+
+  it('holds for the same config', () => {
+    expect(runtimeConfigEquals(base, { ...base })).toBe(true);
+  });
+
+  it('still holds after the same change is applied twice', () => {
+    const changed = { ...base, warnLevel: 1 as const, includePaths: ['C:\\other'] };
+    expect(runtimeConfigEquals(changed, { ...changed })).toBe(true);
+  });
+
+  it('separates a different warning level', () => {
+    expect(runtimeConfigEquals(base, { ...base, warnLevel: 1 })).toBe(false);
+  });
+
+  it('separates different include paths', () => {
+    expect(
+      runtimeConfigEquals(base, { ...base, includePaths: [...base.includePaths, 'C:\\extra'] }),
+    ).toBe(false);
+  });
+
+  it('separates reordered include paths', () => {
+    const two = ['C:\\a', 'C:\\b'];
+    expect(
+      runtimeConfigEquals({ ...base, includePaths: two }, { ...base, includePaths: ['C:\\b', 'C:\\a'] }),
+    ).toBe(false);
   });
 });
