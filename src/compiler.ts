@@ -148,16 +148,31 @@ export class DocumentTooLargeError extends Error {
  * temp directory is an error rather than something to truncate, so a file or
  * symlink planted by another local user is never written through. `mode`
  * applies only to a file this call creates, which is why the flag matters.
+ *
+ * The write is asynchronous because it runs on the same event loop that carries
+ * LSP traffic: a source is up to {@link MAX_SOURCE_BYTES}, and a synchronous
+ * write of that size stalls every in-flight client message, `shutdown` included,
+ * for as long as the disk takes. Rejects with {@link DocumentTooLargeError}
+ * rather than throwing it, because the size check is a normal outcome.
  */
-export function createTempSource(content: string, ext: string): string {
+export async function createTempSource(content: string, ext: string): Promise<string> {
   const body = encodeSourceText(content);
   if (body.byteLength > MAX_SOURCE_BYTES) {
     throw new DocumentTooLargeError(body.byteLength);
   }
 
   const tempFile = path.join(os.tmpdir(), `${TEMP_SOURCE_PREFIX}${randomUUID()}${ext}`);
-  fs.writeFileSync(tempFile, body, { encoding: 'utf-8', mode: 0o600, flag: 'wx' });
+  await fs.promises.writeFile(tempFile, body, { encoding: 'utf-8', mode: 0o600, flag: 'wx' });
   return tempFile;
+}
+
+/** Deletes a temp source. A file that is already gone is not an error. */
+export async function removeTempSource(tempFile: string): Promise<void> {
+  try {
+    await fs.promises.unlink(tempFile);
+  } catch {
+    // Temp file may already be gone.
+  }
 }
 
 const checkSlots = new Semaphore(MAX_CONCURRENT_CHECKS);
@@ -322,30 +337,11 @@ export function stripByteOrderMark(content: string): string {
 }
 
 /**
- * Writes `content` to a fresh temp file with `ext` and returns its path.
- * The caller owns the file and must pass the path to {@link removeTempSourceFile}.
- */
-export function createTempSourceFile(content: string, ext: string): string {
-  const tempFile = path.join(os.tmpdir(), `msvc6_lsp_${randomUUID()}${ext}`);
-  fs.writeFileSync(tempFile, stripByteOrderMark(content), { encoding: 'utf-8', mode: 0o600 });
-  return tempFile;
-}
-
-/** Deletes a temp source file. A file that is already gone is not an error. */
-export function removeTempSourceFile(tempFile: string): void {
-  try {
-    fs.unlinkSync(tempFile);
-  } catch {
-    // Already removed, or never created.
-  }
-}
-
-/**
  * Writes `content` to a temp file and runs a syntax check on it.
  * The temp file is cleaned up after the check completes.
  *
- * Exported for the test suite; the server drives {@link createTempSourceFile}
- * itself so it can abort stale checks.
+ * Exported for the test suite; the server stages the file itself through
+ * {@link createTempSource} so it can abort stale checks.
  */
 export async function syntaxCheckContent(
   config: Msvc6Config,

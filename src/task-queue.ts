@@ -119,13 +119,28 @@ export class TaskQueue {
   }
 
   private dispatch(entry: QueueEntry): void {
-    // The runner owns its own rejection; letting it through would make a
-    // transient compile failure an unhandled rejection. Swallow it here so
-    // `finish` runs exactly once either way.
-    void entry
-      .run(entry.controller.signal)
-      .catch(() => undefined)
-      .then(() => this.finish(entry));
+    void this.settle(entry);
+  }
+
+  /**
+   * Runs `entry` and releases its slot however it ends.
+   *
+   * The call sits inside the `try` so a runner that throws before returning a
+   * promise is treated the same as one that returns a rejected promise. Both
+   * shapes are the same failure to this queue: a slot held by an entry that
+   * will never settle wedges every later submission and leaves `drained()`
+   * pending forever. Letting the throw escape would also surface it in the
+   * caller's `submit`, which is an LSP message handler.
+   */
+  private async settle(entry: QueueEntry): Promise<void> {
+    try {
+      await entry.run(entry.controller.signal);
+    } catch {
+      // The runner owns its own reporting; a rejection surfacing here would
+      // make a transient compile failure an unhandled rejection.
+    } finally {
+      this.finish(entry);
+    }
   }
 
   private finish(entry: QueueEntry): void {

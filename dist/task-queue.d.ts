@@ -1,23 +1,5 @@
-/**
- * A bounded, per-key cancellation queue for asynchronous work.
- *
- * Two properties matter for the validation pipeline:
- *
- * - **Bounded concurrency.** At most `concurrency` tasks run at once; the rest
- *   wait. Without this, one `CL.EXE` child is spawned per open document as soon
- *   as their debounce timers expire in the same tick.
- * - **Last writer wins per key.** Submitting a new task under a key aborts the
- *   one already queued or running under it, so a superseded keystroke never
- *   reaches the compiler and never publishes diagnostics.
- *
- * Tasks are aborted, never dropped silently: the runner sees an aborted signal
- * and the caller's `finally` still runs.
- */
-export interface TaskRunner {
-    (signal: AbortSignal): Promise<void>;
-}
 export declare class TaskQueue {
-    readonly concurrency: number;
+    private readonly concurrency;
     /** Waiting entries, oldest first. */
     private queue;
     /** Live entry per key, queued or running. The handle used to supersede. */
@@ -28,17 +10,13 @@ export declare class TaskQueue {
     private waiters;
     private closed;
     constructor(concurrency: number);
-    /** True while an entry for `key` is queued or running. */
-    has(key: string): boolean;
-    /** True while an entry for `key` is inside `run`. */
-    isRunning(key: string): boolean;
     /** Number of entries waiting for a free slot. */
     get pending(): number;
     /**
      * Submits `run` under `key`, aborting whatever the key was doing before.
      * A no-op once the queue is closed.
      */
-    submit(key: string, run: TaskRunner): void;
+    submit(key: string, run: (signal: AbortSignal) => Promise<void>): void;
     /**
      * Aborts the entry for `key`, queued or running, and forgets it. Safe to
      * call for a key that is not in the queue.
@@ -58,6 +36,17 @@ export declare class TaskQueue {
     private isIdle;
     private pump;
     private dispatch;
+    /**
+     * Runs `entry` and releases its slot however it ends.
+     *
+     * The call sits inside the `try` so a runner that throws before returning a
+     * promise is treated the same as one that returns a rejected promise. Both
+     * shapes are the same failure to this queue: a slot held by an entry that
+     * will never settle wedges every later submission and leaves `drained()`
+     * pending forever. Letting the throw escape would also surface it in the
+     * caller's `submit`, which is an LSP message handler.
+     */
+    private settle;
     private finish;
     private settleWaiters;
 }

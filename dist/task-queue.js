@@ -18,15 +18,6 @@ class TaskQueue {
         }
         this.concurrency = concurrency;
     }
-    /** True while an entry for `key` is queued or running. */
-    has(key) {
-        return this.byKey.has(key);
-    }
-    /** True while an entry for `key` is inside `run`. */
-    isRunning(key) {
-        const entry = this.byKey.get(key);
-        return entry !== undefined && this.running.has(entry);
-    }
     /** Number of entries waiting for a free slot. */
     get pending() {
         return this.queue.length;
@@ -97,9 +88,29 @@ class TaskQueue {
         this.settleWaiters();
     }
     dispatch(entry) {
-        // The runner owns its own rejection; reporting it here would make a
-        // transient compile failure an unhandled rejection.
-        void entry.run(entry.controller.signal).then(() => this.finish(entry), () => this.finish(entry));
+        void this.settle(entry);
+    }
+    /**
+     * Runs `entry` and releases its slot however it ends.
+     *
+     * The call sits inside the `try` so a runner that throws before returning a
+     * promise is treated the same as one that returns a rejected promise. Both
+     * shapes are the same failure to this queue: a slot held by an entry that
+     * will never settle wedges every later submission and leaves `drained()`
+     * pending forever. Letting the throw escape would also surface it in the
+     * caller's `submit`, which is an LSP message handler.
+     */
+    async settle(entry) {
+        try {
+            await entry.run(entry.controller.signal);
+        }
+        catch {
+            // The runner owns its own reporting; a rejection surfacing here would
+            // make a transient compile failure an unhandled rejection.
+        }
+        finally {
+            this.finish(entry);
+        }
     }
     finish(entry) {
         this.running.delete(entry);

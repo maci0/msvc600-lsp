@@ -9,6 +9,7 @@ import {
   stripByteOrderMark,
   sweepStaleTempFiles,
   createTempSource,
+  removeTempSource,
   DocumentTooLargeError,
   MAX_SOURCE_BYTES,
   MAX_CONCURRENT_CHECKS,
@@ -115,7 +116,7 @@ describeWithToolchain('syntaxCheck on a scratch source', () => {
 
   /** Writes `content` to a scratch file the way the server does, then checks it. */
   async function check(content: string, ext: string) {
-    const tempFile = createTempSource(content, ext);
+    const tempFile = await createTempSource(content, ext);
     scratch.push(tempFile);
     return syntaxCheck(testConfig(), tempFile);
   }
@@ -484,30 +485,37 @@ describe('createTempSource', () => {
     }
   });
 
-  it('writes the content to a fresh file the caller owns', () => {
-    const tempFile = createTempSource('int main(void) { return 0; }\n', '.c');
+  it('writes the content to a fresh file the caller owns', async () => {
+    const tempFile = await createTempSource('int main(void) { return 0; }\n', '.c');
     created.push(tempFile);
     expect(fs.readFileSync(tempFile, 'utf-8')).toBe('int main(void) { return 0; }\n');
   });
 
-  it('strips a leading BOM so the file starts at the first declaration', () => {
-    const tempFile = createTempSource('\ufeffint main(void) { return 0; }\n', '.c');
+  it('strips a leading BOM so the file starts at the first declaration', async () => {
+    const tempFile = await createTempSource('\ufeffint main(void) { return 0; }\n', '.c');
     created.push(tempFile);
     expect(fs.readFileSync(tempFile, 'utf-8')).toBe('int main(void) { return 0; }\n');
   });
 
-  it('creates the file readable by its owner only', () => {
-    const tempFile = createTempSource('int x;\n', '.c');
+  it('creates the file readable by its owner only', async () => {
+    const tempFile = await createTempSource('int x;\n', '.c');
     created.push(tempFile);
     expect(fs.statSync(tempFile).mode & 0o777).toBe(0o600);
   });
 
-  it('refuses content over the syntax-check size limit, leaving no file behind', () => {
+  it('refuses content over the syntax-check size limit, leaving no file behind', async () => {
     const before = fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('msvc6_lsp_')).length;
     const oversized = 'a'.repeat(MAX_SOURCE_BYTES + 1);
-    expect(() => createTempSource(oversized, '.c')).toThrow(DocumentTooLargeError);
+    await expect(createTempSource(oversized, '.c')).rejects.toThrow(DocumentTooLargeError);
     const after = fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('msvc6_lsp_')).length;
     expect(after).toBe(before);
+  });
+
+  it('removes a file it created, and tolerates one already gone', async () => {
+    const tempFile = await createTempSource('int x;\n', '.c');
+    await removeTempSource(tempFile);
+    expect(fs.existsSync(tempFile)).toBe(false);
+    await expect(removeTempSource(tempFile)).resolves.toBeUndefined();
   });
 });
 

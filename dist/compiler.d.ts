@@ -2,8 +2,14 @@ import { Msvc6Config } from './config';
 import { TempFileStore } from './tempfile';
 /** Upper bound on the source text handed to a syntax check. */
 export declare const MAX_SOURCE_BYTES: number;
-/** Concurrent CL.EXE children allowed at once; each one is a Wine process. */
-export declare const MAX_CONCURRENT_CHECKS = 4;
+/**
+ * Concurrent CL.EXE children allowed at once. Each one is a heavyweight process
+ * (a full Wine services startup on non-Windows), so the number is kept at the
+ * parallelism a developer machine absorbs; the rest queue rather than dropping.
+ * The server schedules through the same number, so the two layers of the
+ * pipeline agree on one limit.
+ */
+export declare const MAX_CONCURRENT_CHECKS = 2;
 /** Options for the entry points that stage document text on disk. */
 export interface TempFileOptions {
     /** Filesystem boundary to write through. Defaults to the real temp directory. */
@@ -42,20 +48,30 @@ export declare class DocumentTooLargeError extends Error {
 }
 /**
  * Writes `content` to a fresh temp file with the given extension and returns
- * its path. The caller owns the file and must unlink it.
+ * its path. The bytes written are the prepared UTF-8 source, so the size check
+ * and the file on disk agree. The caller owns the file and must unlink it.
  *
  * The create is exclusive (`wx`): a path that already exists in the shared
  * temp directory is an error rather than something to truncate, so a file or
  * symlink planted by another local user is never written through. `mode`
  * applies only to a file this call creates, which is why the flag matters.
+ *
+ * The write is asynchronous because it runs on the same event loop that carries
+ * LSP traffic: a source is up to {@link MAX_SOURCE_BYTES}, and a synchronous
+ * write of that size stalls every in-flight client message, `shutdown` included,
+ * for as long as the disk takes. Rejects with {@link DocumentTooLargeError}
+ * rather than throwing it, because the size check is a normal outcome.
  */
-export declare function createTempSource(content: string, ext: string): string;
+export declare function createTempSource(content: string, ext: string): Promise<string>;
+/** Deletes a temp source. A file that is already gone is not an error. */
+export declare function removeTempSource(tempFile: string): Promise<void>;
 /**
  * Runs CL.EXE in syntax-check mode (`/Zs`) on the given file.
  *
  * At most {@link MAX_CONCURRENT_CHECKS} children run at once; the rest queue,
  * so a burst of open documents cannot spawn an unbounded number of Wine
- * processes. A queued check whose signal aborts is dropped before it starts.
+ * processes. A queued check whose signal aborts leaves the queue without ever
+ * taking a slot.
  *
  * Always resolves — compiler errors are reported via `exitCode` and
  * `rawOutput`, not via promise rejection. Rejects only when no check could
@@ -68,12 +84,6 @@ export declare function syntaxCheck(config: Msvc6Config, filePath: string, opts?
     signal?: AbortSignal;
     timeoutMs?: number;
 }): Promise<CompileResult>;
-/**
- * Returns a fresh, unused path for a scratch source file. The random name
- * makes two concurrent checks of the same document independent rather than
- * overwriting each other's input.
- */
-export declare function createTempSourcePath(languageId: string): string;
 /**
  * Deletes scratch sources left behind by a run that was killed before its
  * cleanup, and returns the paths removed. A server that is restarted after a
@@ -90,18 +100,11 @@ export declare function sweepStaleTempFiles(now?: number): string[];
  */
 export declare function stripByteOrderMark(content: string): string;
 /**
- * Writes `content` to a fresh temp file with `ext` and returns its path.
- * The caller owns the file and must pass the path to {@link removeTempSourceFile}.
- */
-export declare function createTempSourceFile(content: string, ext: string): string;
-/** Deletes a temp source file. A file that is already gone is not an error. */
-export declare function removeTempSourceFile(tempFile: string): void;
-/**
  * Writes `content` to a temp file and runs a syntax check on it.
  * The temp file is cleaned up after the check completes.
  *
- * Exported for the test suite; the server drives {@link createTempSourceFile}
- * itself so it can abort stale checks.
+ * Exported for the test suite; the server stages the file itself through
+ * {@link createTempSource} so it can abort stale checks.
  */
 export declare function syntaxCheckContent(config: Msvc6Config, content: string, languageId: string, opts?: TempFileOptions): Promise<CompileResult & {
     tempFile: string;

@@ -13,7 +13,6 @@ import {
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { URI } from 'vscode-uri';
 import * as path from 'path';
-import * as fs from 'fs';
 import {
   Msvc6Config,
   defaultConfig,
@@ -28,6 +27,7 @@ import {
 import {
   syntaxCheck,
   createTempSource,
+  removeTempSource,
   sweepStaleTempFiles,
   DocumentTooLargeError,
   COMPILE_TIMEOUT_MS,
@@ -210,6 +210,8 @@ connection.onDidChangeConfiguration((change) => {
   for (const d of documents.all()) scheduleValidation(d);
 });
 
+// `TextDocuments` fires this for `didOpen` as well as `didChange`, so a
+// document that is merely opened is still checked.
 documents.onDidChangeContent((change) => {
   const uri = change.document.uri;
   clearPendingValidation(uri);
@@ -312,7 +314,12 @@ async function runValidation(
     // A newer edit aborted this one while it sat in the queue.
     if (signal.aborted) return;
 
-    tempFile = createTempSource(content, ext);
+    tempFile = await createTempSource(content, ext);
+
+    // The write yields, so the abort can land after the guard above. Staging a
+    // scratch file for a check that will never run only widens the window in
+    // which an unsaved buffer sits in the shared temp directory.
+    if (signal.aborted) return;
 
     const result = await syntaxCheck(config, tempFile, { signal });
 
@@ -361,11 +368,7 @@ async function runValidation(
     connection.console.error(`Validation error (${uri}): ${String(e)}`);
   } finally {
     if (tempFile !== undefined) {
-      try {
-        fs.unlinkSync(tempFile);
-      } catch {
-        // Temp file may already be gone.
-      }
+      await removeTempSource(tempFile);
     }
   }
 }
