@@ -1,13 +1,15 @@
 # Threat model: msvc600-lsp
 
-Last reviewed: 2026-09-27. Reviewed against commit `15e6f72` and the
-uncommitted `src/`, `scripts/`, `package.json` tree. Validation concurrency
-was subsequently bounded; see `src/task-queue.ts` and section 5.
+Last reviewed: 2026-09-27. Reviewed against commit `6c628d6` and the
+`src/`, `scripts/`, `package.json` tree as of `ba33371`, which added the
+command line. Validation concurrency was bounded; see `src/task-queue.ts` and
+section 5. The command line introduced the TCP transport below.
 
 The server runs as a local process, started by an editor, and speaks LSP over
-stdio. There is no network listener, no database, and no credential store, so
-the attack surface is small. The whole model reduces to two questions: who can
-speak the stdio channel, and who controls the command line that reaches
+stdio, over the Node IPC channel, or over a TCP socket the caller names with
+`--socket=<port>`. There is no database and no credential store, so the
+attack surface is small. The whole model reduces to two questions: who can
+speak the LSP channel, and who controls the command line that reaches
 `CL.EXE`.
 
 Every line reference below was re-read against the code at `6c628d6`.
@@ -16,7 +18,7 @@ Every line reference below was re-read against the code at `6c628d6`.
 
 | # | Threat | Boundary | Impact | Existing control |
 |---|--------|----------|--------|------------------|
-| 1 | Initialization options choose the executable and the flags | client to server (initializationOptions) | Arbitrary program execution and file writes as the editing user | None. Deliberate, but undocumented in README |
+| 1 | Initialization options choose the executable and the flags | client to server (initializationOptions) | Arbitrary program execution and file writes as the editing user | None. Deliberate, and stated in README under "Runtime Configuration" |
 | 2 | A hostile client sets `includePaths` to a directory it controls | server to CL.EXE | Header shadowing turns any open C/C++ file into attacker-chosen compile input | `validateConfig` type checks only (`src/config.ts:112-199`) |
 | 3 | `didChangeConfiguration` revalidates every open document | client to server | Process and memory exhaustion, editor stall | `TaskQueue` caps concurrent `CL.EXE` children at 2 (`src/server.ts:68`, `src/task-queue.ts`); debounce and abort per URI (`src/server.ts:164-177`); a notification that changes nothing is a no-op (`src/server.ts:147`) |
 | 4 | Document text is written to a shared temp directory | server to filesystem | Source code exposure to other local users; temp leak on crash | `0o600` mode, random names, and an exclusive create (`src/server.ts:282-287`, `src/tempfile.ts:52-61`); orphans from a crashed run are swept at startup (`src/server.ts:335`) |
@@ -27,12 +29,14 @@ Every line reference below was re-read against the code at `6c628d6`.
 
 ## 1. Attack surface
 
-Entry points, all of them local. There is no HTTP, RPC, webhook, or network
-listener in the tree.
+Entry points, all of them local. There is no HTTP, RPC, or webhook in the
+tree, and the one network transport is a TCP socket the caller asks for by
+name with `--socket=<port>`; nothing listens unless that flag is passed.
 
 | Entry point | Location | Source of input |
 |-------------|----------|-----------------|
 | stdio JSON-RPC connection | `src/server.ts:40`, `src/server.ts:330` | The spawning editor, or anything that can exec the process and write to its stdin |
+| TCP socket from `--socket=<port>` | `src/cli.ts`, passed to `createConnection` in `src/server.ts` | Any host that can reach the port. Unauthenticated, and nothing restricts who may connect |
 | `initialize` / `initializationOptions` | `src/server.ts:81` | Client-supplied object, merged into config |
 | `workspace/didChangeConfiguration` | `src/server.ts:127` | Client-supplied `settings.msvc6` |
 | `textDocument/didOpen`, `didChange` (full sync) | `src/server.ts:164` | Full document text, unbounded in size |
@@ -56,7 +60,11 @@ dependency surface is the four `vscode-languageserver*` packages and
    or write to its stdin is the client; there is no token, no handshake, no
    origin check. This is inherent to stdio LSP, so the mitigation is
    deployment, not code: the server must be launched by the user's editor and
-   not exposed as a service.
+   not exposed as a service. `--socket=<port>` breaks that assumption rather
+   than extending it: the listener binds without a credential, so every
+   control below that assumes "the client is the user's editor" holds only
+   because nothing in the tree tells an operator not to pass that flag on a
+   reachable interface. It is not in the deployment guidance in `README.md`.
 2. **Server to `CL.EXE`.** `execFile` with an argument vector
    (`src/compiler.ts:198`). No shell, so no metacharacter injection. The
    argument vector is assembled from config in `src/compiler.ts:56-79`.
@@ -207,7 +215,8 @@ Not implemented, ranked by exploitability then impact:
    number of open files.
 3. No bound on document size before it is written to disk.
 4. No restriction on which directories `includePaths` may name.
-5. No authentication or provenance check on the stdio peer.
+5. No authentication or provenance check on the LSP peer, on stdio or on the
+   `--socket=<port>` listener.
 6. Configuration is logged to the LSP log channel (`connection.console`),
    which is not a durable audit trail: a client that alters the toolchain
    leaves a trace only for as long as the client keeps its log.

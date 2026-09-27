@@ -46,23 +46,56 @@ Configure your editor's LSP client to launch `bun dist/server.js --stdio`.
 
 ### Command Line
 
+`msvc600-lsp --help` prints:
+
 ```
 Usage: msvc600-lsp [options]
+
+Language server that syntax-checks C/C++ buffers with Microsoft Visual C++ 6.0.
+It speaks LSP over a pipe and writes nothing to stdout except protocol frames.
 
 Options:
       --stdio           communicate over stdin/stdout
       --node-ipc        communicate over the Node IPC channel
       --socket=<port>   connect to a TCP server on <port>
-  -h, --help            print help and exit
+  -h, --help            print this help and exit
   -V, --version         print the version and exit
+
+Configuration comes from MSVC600_* environment variables and from the client's
+initializationOptions, in that order of increasing precedence. No configuration
+is passed on the command line; 'initialize' reports the effective values.
+
+Environment:
+  MSVC600_MSVC_BASE_PATH
+  MSVC600_CL_PATH
+  MSVC600_INCLUDE_PATHS
+  MSVC600_WARN_LEVEL
+  MSVC600_ADDITIONAL_FLAGS
+  MSVC600_WINE_EXECUTABLE
+  MSVC600_OUTPUT_ENCODING
+  MSVC600_USE_WINE
+  MSVC600_CHECK_TIMEOUT_MS
+  MSVC600_MAX_OUTPUT_BYTES
+
+Examples:
+  msvc600-lsp --stdio
+  MSVC600_WARN_LEVEL=2 msvc600-lsp --stdio
+  msvc600-lsp --socket=6009
+
+Version: 0.1.0
 ```
 
 The server has no default transport, so a bare `msvc600-lsp` is a usage error rather than a
-crash. Exit codes: `0` success, `1` the server failed to start, `2` bad argument. `--help` and
-`--version` write to stdout; a usage error writes to stderr and leaves stdout empty, so a script
-capturing stdout never reads an error page as server output. Nothing else is configurable on the
-command line: configuration comes from the environment and from `initializationOptions`, described
-below.
+crash: pass `--stdio`, `--node-ipc`, or `--socket=<port>`. Exit codes: `0` after `--help` or
+`--version`, `2` for a bad argument or a missing transport. A serving process never exits on its
+own; a startup failure surfaces as the runtime's own nonzero exit. `--help` and `--version`
+write to stdout; a usage error writes to stderr and leaves stdout empty, so a script capturing
+stdout never reads an error page as server output. `--version` prints the `version` field of
+`package.json`, the one place the package version is declared. `--socket=<port>` listens on a TCP
+port with no authentication and no origin check, so anything that can reach it becomes the
+client and picks the binary that runs; bind it to a loopback address and do not use it as a
+service. Nothing else is configurable on the command line: configuration comes from the
+environment and from `initializationOptions`, described below.
 
 ### Configuration
 
@@ -141,7 +174,7 @@ Only `includePaths` and `warnLevel` can be changed at runtime via `workspace/did
 }
 ```
 
-Other fields (especially `additionalFlags`) cannot be changed at runtime, so a runtime notification cannot inject CL.EXE flags. They are still set freely at startup, where the client also picks `clPath` and `wineExecutable`, so anything able to speak the server's stdio channel can choose the binary that runs and the flags it receives. See `docs/THREAT_MODEL.md`. Rejected fields are dropped and logged, so a bad value leaves the previous one in place with a reason attached. Changing the config re-validates every open document.
+Other fields (especially `additionalFlags`) cannot be changed at runtime, so a runtime notification cannot inject CL.EXE flags. They are still set freely at startup, where the client also picks `clPath` and `wineExecutable`, so anything able to speak the server's LSP channel can choose the binary that runs and the flags it receives. See `docs/THREAT_MODEL.md`. Rejected fields are dropped and logged, so a bad value leaves the previous one in place with a reason attached. Changing the config re-validates every open document.
 
 ## Architecture
 
@@ -211,6 +244,13 @@ single file or a single test by name, see "Test layout" in `CONTRIBUTING.md`.
 Both shell scripts take `--help`. `doctor.sh` writes each missing prerequisite to stderr and
 exits 1; `setup-includes.sh` takes `--dest DIR` to mirror the overlay somewhere other than
 `$HOME/.wine/drive_c/msvc6`. A bad argument to either is exit code 2.
+
+## Further reading
+
+- [`CHANGELOG.md`](CHANGELOG.md) records what changed in each version, and
+  [`CONTRIBUTING.md`](CONTRIBUTING.md) covers the release process.
+- [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) is the trust-boundary analysis of the LSP
+  channel, the configuration, and the scratch sources.
 
 ## License
 

@@ -146,11 +146,13 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
   }
 
   connection.console.info(
-    `effective configuration: cl=${config.useWine ? `${config.wineExecutable} ${config.clPath}` : config.clPath}, ` +
-      `includePaths=${JSON.stringify(config.includePaths)}, warnLevel=${config.warnLevel}, ` +
-      `additionalFlags=${JSON.stringify(config.additionalFlags)}, useWine=${config.useWine}, ` +
-      `outputEncoding=${config.outputEncoding}, checkTimeoutMs=${config.checkTimeoutMs}, ` +
-      `maxOutputBytes=${config.maxOutputBytes}`,
+    sanitizeForLog(
+      `effective configuration: cl=${config.useWine ? `${config.wineExecutable} ${config.clPath}` : config.clPath}, ` +
+        `includePaths=${JSON.stringify(config.includePaths)}, warnLevel=${config.warnLevel}, ` +
+        `additionalFlags=${JSON.stringify(config.additionalFlags)}, useWine=${config.useWine}, ` +
+        `outputEncoding=${config.outputEncoding}, checkTimeoutMs=${config.checkTimeoutMs}, ` +
+        `maxOutputBytes=${config.maxOutputBytes}`,
+    ),
   );
 
   return {
@@ -358,7 +360,7 @@ async function runValidation(
       uri,
       diagnostics: [toFailureDiagnostic(`Syntax check failed: ${errorMessage(e)}`)],
     });
-    connection.console.error(`Validation error (${uri}): ${String(e)}`);
+    connection.console.error(sanitizeForLog(`Validation error (${uri}): ${String(e)}`));
   } finally {
     if (tempFile !== undefined) {
       try {

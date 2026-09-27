@@ -20,7 +20,6 @@ bun run check
 ```
 
 `check` is the whole local gate, in order: `shellcheck scripts/*.sh`, then `tsc --noEmit` over
-`check` is the whole local gate, in order: `shellcheck scripts/*.sh`, then `tsc --noEmit` over
 `src/` plus `tsc -p tsconfig.test.json` over `src/` and `tests/`, then the full test suite. Run
 `bun run check` before every push. CI (`.github/workflows/ci.yml`) runs that same gate on Linux,
 preceded by `bun install --frozen-lockfile` so a lockfile that no longer resolves fails the build
@@ -63,3 +62,24 @@ bun run test -t 'toLspDiagnostics'
   MSVC message format needs a test in `tests/diagnostics.test.ts` next to the existing ones.
 - Comments explain contracts and non-obvious constraints (why SIGKILL, why NFC normalization),
   not what the next line does.
+
+## Releases
+
+The package is unpublished and unlicensed, and no tag has been cut, so nothing here has a
+published consumer yet. The rules below apply to the first tag and after it.
+
+- `package.json` `version` is the only place the version is declared. `msvc600-lsp --version`
+  reads that field, and the changelog headings name it, so bump it once per release and change
+  nothing else to a version number.
+- The project follows Semantic Versioning, and the package is below `1.0.0`: before `1.0.0` a
+  minor bump may carry a breaking change to the LSP surface, and the changelog says so under
+  `### Breaking` in that release's entry. From `1.0.0` on, a breaking change needs a major bump
+  and a migration note.
+- A change to the command line, to the `initializationOptions` or `MSVC600_*` schema, to the
+  diagnostics a clean file produces, or to the file format the server writes is consumer
+  visible. It goes in `CHANGELOG.md` under `## [Unreleased]` in the same change, not at release
+  time, grouped as `### Breaking`, `### Added`, `### Fixed`.
+- At release, rename `## [Unreleased]` to `## [<version>] - <date>` and start a fresh
+  `## [Unreleased]`. The tag name and the changelog heading carry the same version string.
+- `docs/THREAT_MODEL.md` names the commits it was written against. Re-anchor it in the same
+  change when a change alters what the server accepts over the LSP channel.
