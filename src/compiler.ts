@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { TextDecoder } from 'util';
 import { Msvc6Config, CPP_EXTENSIONS, C_EXTENSIONS } from './config';
 import { toWinePath } from './wine-path';
 import { TempFileStore, createSystemTempFileStore } from './tempfile';
@@ -26,17 +27,17 @@ export const MAX_SOURCE_BYTES = 8 * 1024 * 1024;
 /** Concurrent CL.EXE children allowed at once; each one is a Wine process. */
 export const MAX_CONCURRENT_CHECKS = 4;
 
-/** Wall-clock ceiling for a single CL.EXE invocation before it is killed. */
-const SYNTAX_CHECK_TIMEOUT_MS = 30000;
-
-/** Ceiling on captured CL.EXE output; past it, stdout is truncated and diagnostics may be incomplete. */
-const SYNTAX_CHECK_MAX_BUFFER_BYTES = 1024 * 1024;
-
 /** Options for the entry points that stage document text on disk. */
 export interface TempFileOptions {
   /** Filesystem boundary to write through. Defaults to the real temp directory. */
   store?: TempFileStore;
 }
+
+/** Wall-clock limit for one CL.EXE run before the process is killed. */
+export const COMPILE_TIMEOUT_MS = 30000;
+
+/** Cap on captured stdout and stderr, per stream. */
+export const MAX_OUTPUT_BYTES = 1024 * 1024;
 
 /** Result of a CL.EXE syntax-check invocation. */
 export interface CompileResult {
@@ -47,6 +48,13 @@ export interface CompileResult {
   rawOutput: string;
   /** True when output was truncated (maxBuffer exceeded). Diagnostics may be incomplete. */
   truncated: boolean;
+  /**
+   * True when CL.EXE was killed after {@link COMPILE_TIMEOUT_MS}. The exit code
+   * and output are then meaningless: no diagnostic in `rawOutput` was produced
+   * by a completed run, and a missing diagnostic means the check timed out,
+   * not that the file is clean.
+   */
+  timedOut: boolean;
 }
 
 /**
@@ -99,8 +107,17 @@ function getExitCode(error: Error | null): number {
  * Decodes CL.EXE output bytes. A `TextDecoder` never throws on malformed
  * input, so undecodable bytes become U+FFFD rather than aborting the check.
  */
-function decodeOutput(bytes: Buffer, encoding: string): string {
-  return new TextDecoder(encoding).decode(bytes);
+function decodeOutput(bytes: Buffer, decoder: TextDecoder): string {
+  return decoder.decode(bytes);
+}
+
+/**
+ * Whether the child was killed by the exec timeout rather than by the caller.
+ * A timeout kill carries no string `code` (it is `null`) and no `status`, so
+ * only `killed` distinguishes it from an ordinary non-zero exit.
+ */
+function isTimeoutKill(error: Error | null): boolean {
+  return error != null && (error as { killed?: boolean }).killed === true;
 }
 
 /** Raised when a buffer exceeds {@link MAX_SOURCE_BYTES}. */
@@ -169,19 +186,22 @@ function abortError(): NodeJS.ErrnoException {
  * processes. A queued check whose signal aborts is dropped before it starts.
  *
  * Always resolves — compiler errors are reported via `exitCode` and
- * `rawOutput`, not via promise rejection. Rejects only when the executable
- * itself cannot be spawned (e.g. ENOENT, EACCES) or the signal aborts.
+ * `rawOutput`, not via promise rejection. Rejects only when no check could
+ * be attempted at all: the executable could not be spawned (ENOENT, EACCES,
+ * ENOTDIR), the call was aborted, or `outputEncoding` is not a known label.
+ * A run that was killed by `timeoutMs` resolves with `timedOut: true` and an
+ * exit code that carries no diagnostic meaning.
  */
 export async function syntaxCheck(
   config: Msvc6Config,
   filePath: string,
-  opts: { signal?: AbortSignal } = {},
+  opts: { signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<CompileResult> {
   if (opts.signal?.aborted) throw abortError();
   await acquireCheckSlot();
   try {
     if (opts.signal?.aborted) throw abortError();
-    return await runCheck(config, filePath, opts.signal);
+    return await runCheck(config, filePath, opts);
   } finally {
     releaseCheckSlot();
   }
@@ -190,7 +210,7 @@ export async function syntaxCheck(
 function runCheck(
   config: Msvc6Config,
   filePath: string,
-  signal: AbortSignal | undefined,
+  opts: { signal?: AbortSignal; timeoutMs?: number },
 ): Promise<CompileResult> {
   return new Promise((resolve, reject) => {
     const args = buildArgs(config, filePath);
@@ -201,6 +221,22 @@ function runCheck(
       ? { ...process.env, WINEDEBUG: '-all' }
       : { ...process.env };
 
+    // Built before the spawn: an unknown encoding label throws here, and a
+    // throw inside the executor rejects instead of escaping from the
+    // execFile callback as an uncaught exception.
+    let decoder: TextDecoder;
+    try {
+      decoder = new TextDecoder(config.outputEncoding);
+    } catch (e) {
+      reject(
+        new Error(
+          `Cannot run ${executable} on ${filePath}: unsupported outputEncoding ` +
+            `${JSON.stringify(config.outputEncoding)} (${(e as Error).message})`,
+        ),
+      );
+      return;
+    }
+
     execFile(
       executable,
       execArgs,
@@ -209,15 +245,15 @@ function runCheck(
       // below with the configured output encoding, not assumed to be UTF-8.
       {
         env,
-        timeout: SYNTAX_CHECK_TIMEOUT_MS,
-        maxBuffer: SYNTAX_CHECK_MAX_BUFFER_BYTES,
-        signal,
+        timeout: opts.timeoutMs ?? COMPILE_TIMEOUT_MS,
+        maxBuffer: MAX_OUTPUT_BYTES,
+        signal: opts.signal,
         killSignal: 'SIGKILL',
         encoding: 'buffer',
       },
       (error, stdoutBytes, stderrBytes) => {
-        const stdout = decodeOutput(stdoutBytes, config.outputEncoding);
-        const stderr = decodeOutput(stderrBytes, config.outputEncoding);
+        const stdout = decodeOutput(stdoutBytes, decoder);
+        const stderr = decodeOutput(stderrBytes, decoder);
 
         if (error) {
           const isSpawnFailure =
@@ -232,10 +268,14 @@ function runCheck(
           }
         }
 
-        const truncated = error?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
+        const truncated =
+          error != null &&
+          typeof error.code === 'string' &&
+          error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
+        const timedOut = !truncated && isTimeoutKill(error);
         const exitCode = getExitCode(error);
         const rawOutput = stdout + '\n' + stderr;
-        resolve({ stdout, stderr, exitCode, rawOutput, truncated });
+        resolve({ stdout, stderr, exitCode, rawOutput, truncated, timedOut });
       },
     );
   });

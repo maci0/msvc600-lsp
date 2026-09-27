@@ -191,6 +191,51 @@ describe('syntaxCheck with useWine: false', () => {
   );
 });
 
+describe('syntaxCheck failure signalling', () => {
+  it.runIf(process.platform !== 'win32')(
+    'reports timedOut instead of a compile error when CL.EXE never returns',
+    async () => {
+      const cfg = {
+        ...testConfig(),
+        useWine: false,
+        clPath: path.join(FIXTURES, 'hang.mjs'),
+      };
+      const result = await syntaxCheck(cfg, path.join(FIXTURES, 'valid.c'), { timeoutMs: 300 });
+      expect(result.timedOut).toBe(true);
+      expect(result.truncated).toBe(false);
+      expect(result.rawOutput.trim()).toBe('');
+    },
+  );
+
+  it.runIf(process.platform !== 'win32')(
+    'leaves timedOut false for a normal compiler error',
+    async () => {
+      const cfg = {
+        ...testConfig(),
+        useWine: false,
+        clPath: path.join(FIXTURES, 'emit_cp1252.mjs'),
+      };
+      const result = await syntaxCheck(cfg, path.join(FIXTURES, 'valid.c'));
+      expect(result.timedOut).toBe(false);
+    },
+  );
+
+  it.runIf(process.platform !== 'win32')(
+    'rejects with context when the output encoding is unknown',
+    async () => {
+      const cfg = {
+        ...testConfig(),
+        useWine: false,
+        clPath: path.join(FIXTURES, 'emit_cp1252.mjs'),
+        outputEncoding: 'not-a-real-encoding',
+      };
+      await expect(syntaxCheck(cfg, path.join(FIXTURES, 'valid.c'))).rejects.toThrow(
+        /not-a-real-encoding/,
+      );
+    },
+  );
+});
+
 describe('buildArgs', () => {
   it('includes /nologo and /Zs as the first two flags', () => {
     const args = buildArgs(testConfig(), '/tmp/test.c');

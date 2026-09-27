@@ -31,6 +31,8 @@ import {
   sweepStaleTempFiles,
   DocumentTooLargeError,
   MAX_SOURCE_BYTES,
+  COMPILE_TIMEOUT_MS,
+  MAX_OUTPUT_BYTES,
 } from './compiler';
 import { parseDiagnostics, toLspDiagnostics, toFailureDiagnostic, LSP_UINT_MAX } from './diagnostics';
 import { sanitizeForLog } from './logging';
@@ -73,9 +75,50 @@ const MAX_CONCURRENT_CHECKS = 2;
  */
 const validationQueue = new TaskQueue(MAX_CONCURRENT_CHECKS);
 
+/** Diagnostic code used for failures of the check itself, not of the source file. */
+const TOOL_ERROR_CODE = 'msvc600-check-failed';
+
+/** Range covering a whole first line, where tool-failure diagnostics are anchored. */
+const DOCUMENT_START = {
+  start: { line: 0, character: 0 },
+  end: { line: 0, character: 0 },
+};
+
 /** Reports a caught error to the client log with control characters removed. */
 function logValidationError(context: string, e: unknown): void {
   connection.console.error(sanitizeForLog(`${context}: ${String(e)}`));
+}
+
+/**
+ * Whether `e` came from the compiler run rather than from staging the scratch
+ * source. A rejection raised by `syntaxCheck` carries no errno, while the
+ * filesystem failures that abort the write do.
+ */
+function isCheckFailure(e: unknown): boolean {
+  return !(e instanceof Error && 'code' in e);
+}
+
+/**
+ * Reports a failure of the syntax check as a diagnostic on the document.
+ *
+ * A check that never completed says nothing about the file, so publishing an
+ * empty diagnostic list would read as "no problems found" and silently drop
+ * whatever the user was already seeing.
+ */
+function publishCheckFailure(uri: string, message: string): void {
+  connection.console.error(sanitizeForLog(`MSVC6 syntax check failed for ${uri}: ${message}`));
+  connection.sendDiagnostics({
+    uri,
+    diagnostics: [
+      {
+        range: DOCUMENT_START,
+        severity: DiagnosticSeverity.Error,
+        code: TOOL_ERROR_CODE,
+        source: 'msvc6',
+        message,
+      },
+    ],
+  });
 }
 
 connection.onInitialize((params: InitializeParams): InitializeResult => {
@@ -294,22 +337,46 @@ async function runValidation(
 
     if (!handle.isCurrent()) return;
 
-    const parsed = parseDiagnostics(result.rawOutput);
-    connection.sendDiagnostics({ uri, diagnostics: toLspDiagnostics(parsed, tempFile) });
-  } catch (e) {
-    if (e instanceof DocumentTooLargeError) {
-      if (handle.isCurrent()) {
-        connection.sendDiagnostics({ uri, diagnostics: [tooLargeDiagnostic(e)] });
-      }
+    if (result.timedOut) {
+      publishCheckFailure(
+        uri,
+        `CL.EXE did not finish within ${COMPILE_TIMEOUT_MS} ms and was killed; ` +
+          `diagnostics for this file are unavailable, not empty.`,
+      );
       return;
     }
-    if (signal.aborted) return;
-    if (handle.isCurrent()) {
-      connection.sendDiagnostics({
-        uri,
-        diagnostics: [toFailureDiagnostic(`Syntax check failed: ${errorMessage(e)}`)],
-      });
+
+    const parsed = parseDiagnostics(result.rawOutput);
+    connection.sendDiagnostics({ uri, diagnostics: toLspDiagnostics(parsed, tempFile) });
+
+    if (result.truncated) {
+      connection.console.error(
+        sanitizeForLog(
+          `CL.EXE output for ${uri} exceeded ${MAX_OUTPUT_BYTES} bytes; ` +
+            'reported diagnostics are incomplete',
+        ),
+      );
     }
+  } catch (e) {
+    if (signal.aborted) return;
+    if (!handle.isCurrent()) return;
+
+    if (e instanceof DocumentTooLargeError) {
+      connection.sendDiagnostics({ uri, diagnostics: [tooLargeDiagnostic(e)] });
+      return;
+    }
+
+    if (isCheckFailure(e)) {
+      publishCheckFailure(uri, `Could not run the MSVC6 syntax check: ${errorMessage(e)}`);
+      return;
+    }
+
+    // The scratch source never reached the compiler, so the failure is local
+    // to this run and not evidence that the file is clean.
+    connection.sendDiagnostics({
+      uri,
+      diagnostics: [toFailureDiagnostic(`Syntax check failed: ${errorMessage(e)}`)],
+    });
     connection.console.error(`Validation error (${uri}): ${String(e)}`);
   } finally {
     try {

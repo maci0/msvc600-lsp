@@ -1,6 +1,7 @@
 import { it, expect, beforeAll, afterEach } from 'vitest';
 import { spawn, ChildProcess } from 'child_process';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { MSVC_ROOT, PROJECT_ROOT, describeWithToolchain } from './helpers/toolchain';
 
@@ -48,10 +49,15 @@ function sendNotification(proc: ChildProcess, method: string, params: unknown = 
   proc.stdin?.write(encodeMessage({ jsonrpc: '2.0', method, params }));
 }
 
+/**
+ * Collects messages until `count` of them have arrived, or until one matches
+ * `until` when a predicate is given, or until `timeoutMs` elapses.
+ */
 function waitForMessages(
   proc: ChildProcess,
   count: number,
   timeoutMs = 15000,
+  until?: (message: unknown) => boolean,
 ): Promise<unknown[]> {
   return new Promise((resolve) => {
     const messages: unknown[] = [];
@@ -80,13 +86,15 @@ function waitForMessages(
         const body = buffer.slice(headerBytes, headerBytes + contentLength).toString();
         buffer = buffer.slice(headerBytes + contentLength);
 
+        let parsed: unknown;
         try {
-          messages.push(JSON.parse(body));
+          parsed = JSON.parse(body);
         } catch {
           continue;
         }
+        messages.push(parsed);
 
-        if (messages.length >= count) {
+        if (until ? until(parsed) : messages.length >= count) {
           clearTimeout(timer);
           proc.stdout?.removeListener('data', onData);
           resolve(messages);
@@ -147,17 +155,20 @@ async function initServer(
   return msgs[0];
 }
 
+/** Builds dist/ with the locally installed TypeScript. */
+async function buildServer(): Promise<void> {
+  const { execFileSync } = await import('child_process');
+  // Compile with the locally installed TypeScript: `bunx tsc` depends on a
+  // package runner being on PATH and fails with an opaque error without one.
+  const tsc = path.join(PROJECT_ROOT, 'node_modules', 'typescript', 'bin', 'tsc');
+  if (!fs.existsSync(tsc)) {
+    throw new Error(`TypeScript not installed at ${tsc}; run "bun install" first`);
+  }
+  execFileSync(process.execPath, [tsc], { cwd: PROJECT_ROOT, stdio: 'inherit' });
+}
+
 describeWithToolchain('LSP Server Protocol', () => {
-  beforeAll(async () => {
-    const { execFileSync } = await import('child_process');
-    // Compile with the locally installed TypeScript: `bunx tsc` depends on a
-    // package runner being on PATH and fails with an opaque error without one.
-    const tsc = path.join(PROJECT_ROOT, 'node_modules', 'typescript', 'bin', 'tsc');
-    if (!fs.existsSync(tsc)) {
-      throw new Error(`TypeScript not installed at ${tsc}; run "bun install" first`);
-    }
-    execFileSync(process.execPath, [tsc], { cwd: PROJECT_ROOT, stdio: 'inherit' });
-  }, 120000);
+  beforeAll(buildServer, 120000);
 
   afterEach(() => {
     killServer(serverProcess);
@@ -275,5 +286,47 @@ describeWithToolchain('LSP Server Protocol', () => {
     );
 
     expect(clearNotif).toBeDefined();
+  });
+});
+
+describe('LSP Server tool failure signalling', () => {
+  beforeAll(buildServer, 120000);
+
+  afterEach(() => {
+    killServer(serverProcess);
+    serverProcess = null;
+  });
+
+  it('reports a missing CL.EXE as a diagnostic instead of a clean file', async () => {
+    serverProcess = startServer();
+    await initServer(serverProcess, {
+      useWine: false,
+      clPath: path.join(os.tmpdir(), 'definitely_not_cl_exe.exe'),
+    });
+
+    const uri = 'file:///tmp/test_missing_tool.c';
+    sendNotification(serverProcess, 'textDocument/didOpen', {
+      textDocument: { uri, languageId: 'c', version: 1, text: 'int main(void) { return 0; }\n' },
+    });
+
+    const messages = await waitForMessages(
+      serverProcess,
+      1,
+      10000,
+      (m): boolean =>
+        isLspMessage(m) &&
+        m.method === 'textDocument/publishDiagnostics' &&
+        m.params?.uri === uri,
+    );
+    const diagNotif = messages.find(
+      (m): m is LspMessage =>
+        isLspMessage(m) && m.method === 'textDocument/publishDiagnostics' && m.params?.uri === uri,
+    );
+
+    expect(diagNotif).toBeDefined();
+    const diagnostics = diagNotif!.params!.diagnostics!;
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0].code).toBe('msvc600-check-failed');
+    expect(diagnostics[0].message).toMatch(/ENOENT/);
   });
 });

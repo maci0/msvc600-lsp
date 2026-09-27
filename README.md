@@ -157,6 +157,8 @@ At most four `CL.EXE` children run at once; the rest queue, so a large revalidat
 
 A check that never ran, whether CL.EXE cannot be spawned or the scratch source cannot be written, publishes one error diagnostic at the top of the file saying so rather than an empty list, so a broken setup never reads as a clean file.
 
+A check that never completes, or that cannot start CL.EXE at all, is reported as an `msvc600-check-failed` diagnostic on the file rather than as an empty list, so a broken toolchain is never mistaken for a clean file. Truncated output still publishes its diagnostics, and the dropped tail is logged to the server log.
+
 ## Development
 
 ```bash

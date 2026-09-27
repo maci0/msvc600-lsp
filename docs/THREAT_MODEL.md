@@ -168,7 +168,10 @@ Implemented:
 - Argument vectors instead of a shell, so config values cannot smuggle in
   shell syntax: `src/compiler.ts:204`.
 - `execFile` with `timeout: 30000`, `maxBuffer: 1 MiB`, an `AbortSignal` and
-  `SIGKILL`: `src/compiler.ts:210-217`.
+  `SIGKILL`: `src/compiler.ts:210-217`. A timeout kill is reported as
+  `timedOut` rather than as a compile error, and the server turns it into a
+  tool-failure diagnostic, so a hung `CL.EXE` cannot be mistaken for a clean
+  file.
 - Runtime configuration is restricted to `includePaths` and `warnLevel`;
   `additionalFlags` is rejected there: `src/server.ts:135-143`, with the
   equality test that makes a repeated notification a no-op at
