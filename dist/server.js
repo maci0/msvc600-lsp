@@ -161,11 +161,15 @@ connection.onInitialize((params) => {
             connection.console.warn(line);
         }
     }
-    connection.console.info(`effective configuration: cl=${config.useWine ? `${config.wineExecutable} ${config.clPath}` : config.clPath}, ` +
+    // Every value below except the numbers and the booleans comes from the
+    // client, so the line is sanitized: an include path carrying a newline would
+    // otherwise forge a second log line, and one carrying a bidi control would
+    // reorder this one around it.
+    connection.console.info((0, logging_1.sanitizeForLog)(`effective configuration: cl=${config.useWine ? `${config.wineExecutable} ${config.clPath}` : config.clPath}, ` +
         `includePaths=${JSON.stringify(config.includePaths)}, warnLevel=${config.warnLevel}, ` +
         `additionalFlags=${JSON.stringify(config.additionalFlags)}, useWine=${config.useWine}, ` +
         `outputEncoding=${config.outputEncoding}, checkTimeoutMs=${config.checkTimeoutMs}, ` +
-        `maxOutputBytes=${config.maxOutputBytes}`);
+        `maxOutputBytes=${config.maxOutputBytes}`));
     for (const line of warnAboutMissingExecutables(config)) {
         connection.console.warn((0, logging_1.sanitizeForLog)(line));
     }

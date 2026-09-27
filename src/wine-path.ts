@@ -8,28 +8,31 @@ const WINE_MSVC_BASE_LOWER = WINE_MSVC_BASE.toLowerCase();
 /** Drive Wine exposes the Unix root as. */
 const Z_DRIVE = 'Z:';
 
-/** A path already carrying a Windows drive letter, e.g. `C:\msvc6` or `C:/x`. */
-const WINDOWS_ABSOLUTE = /^[A-Za-z]:[\\/]/;
+/** A drive-letter prefix, which is already a Wine path in whatever letter it names. */
+const DRIVE_PREFIX = /^[A-Za-z]:[\\/]/;
 
 /**
  * Converts a host filesystem path to a Wine-compatible Z:-drive path.
  *
  * Example: `/tmp/test.c` → `Z:\tmp\test.c`
  *
- * The decision is made on the input, not on `path.resolve` of it: on a Windows
- * host `path.resolve('/tmp/test.c')` answers `C:\tmp\test.c`, which would be
- * handed back as a native path and never reach the Unix root Wine mounts on
- * `Z:`. A path that is absolute under POSIX rules keeps its leading slash and
- * maps to `Z:`; a relative path is resolved against the host's own rules, so on
- * Windows it stays a Windows path.
+ * The decision is made on the input, not on `path.resolve` of it. A path that
+ * already names a drive is returned as it stands: `path.resolve` reads a bare
+ * `C:\msvc6\include` as a relative POSIX segment, so resolving first would glue
+ * the working directory in front of it and hand CL.EXE a `Z:` path with a drive
+ * letter in the middle. On a Windows host `path.resolve('/tmp/test.c')` answers
+ * `C:\tmp\test.c`, which would be handed back as a native path and never reach
+ * the Unix root Wine mounts on `Z:`. A path that is absolute under POSIX rules
+ * keeps its leading slash and maps to `Z:`; a relative path is resolved against
+ * the host's own rules, so on Windows it stays a Windows path.
  */
 export function toWinePath(hostPath: string): string {
-  if (WINDOWS_ABSOLUTE.test(hostPath)) return hostPath;
+  if (DRIVE_PREFIX.test(hostPath)) return hostPath;
   if (hostPath.startsWith('/')) {
     return Z_DRIVE + hostPath.replace(/\//g, '\\');
   }
   const absolute = path.resolve(hostPath);
-  if (WINDOWS_ABSOLUTE.test(absolute)) return absolute;
+  if (DRIVE_PREFIX.test(absolute)) return absolute;
   return Z_DRIVE + absolute.replace(/\//g, '\\');
 }
 

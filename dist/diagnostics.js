@@ -143,6 +143,6 @@ function toFailureDiagnostic(message) {
  * normalizing last is what makes the two spellings compare equal.
  */
 function normalizeForComparison(filePath) {
-    return filePath.normalize('NFC').toLowerCase().replace(/\\/g, '/');
+    return filePath.toLowerCase().normalize('NFC').replace(/\\/g, '/');
 }
 //# sourceMappingURL=diagnostics.js.map

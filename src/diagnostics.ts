@@ -171,6 +171,6 @@ export function toFailureDiagnostic(message: string): Diagnostic {
  * normalizing last is what makes the two spellings compare equal.
  */
 function normalizeForComparison(filePath: string): string {
-  return filePath.normalize('NFC').toLowerCase().replace(/\\/g, '/');
+  return filePath.toLowerCase().normalize('NFC').replace(/\\/g, '/');
 }
 

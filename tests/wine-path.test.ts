@@ -24,9 +24,12 @@ describe('toWinePath', () => {
     expect(result).toContain('relative\\path.c');
   });
 
-  it('leaves a Windows path untouched', () => {
+  it('leaves a path that already names a drive alone', () => {
+    // Resolving first would read this as a relative POSIX segment and produce
+    // Z:\<cwd>\C:\msvc6\include, a drive letter in the middle of a Z: path.
     expect(toWinePath('C:\\msvc6\\include')).toBe('C:\\msvc6\\include');
     expect(toWinePath('C:/msvc6/include')).toBe('C:/msvc6/include');
+    expect(toWinePath('z:\\share\\headers')).toBe('z:\\share\\headers');
   });
 
   it('maps a POSIX absolute path to Z: without asking path.resolve', () => {

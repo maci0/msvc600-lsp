@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createDebouncer, createManualScheduler, realScheduler } from '../src/scheduler';
 
 const DEBOUNCE_MS = 300;
@@ -80,6 +80,20 @@ describe('createDebouncer', () => {
     debouncer.cancelAll();
     scheduler.advance(DEBOUNCE_MS);
     expect(ran).toEqual([]);
+  });
+
+  it('forgets a key once its task has fired, so a later edit re-arms it', () => {
+    const scheduler = createManualScheduler();
+    const debouncer = createDebouncer(scheduler, DEBOUNCE_MS);
+    const task = vi.fn();
+
+    debouncer.schedule('file:///a.c', task);
+    scheduler.advance(DEBOUNCE_MS);
+    expect(debouncer.pendingKeys.size).toBe(0);
+
+    debouncer.schedule('file:///a.c', task);
+    scheduler.advance(DEBOUNCE_MS);
+    expect(task).toHaveBeenCalledTimes(2);
   });
 
   it('coalesces a real-time burst into one run', async () => {

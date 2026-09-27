@@ -69,8 +69,8 @@ export function createDebouncer(scheduler: Scheduler, delayMs: number): Debounce
   const cancels = new Map<string, () => void>();
 
   const cancel = (key: string): void => {
-    const pending = cancels.get(key);
-    if (pending) pending();
+    const disarm = cancels.get(key);
+    if (disarm) disarm();
     cancels.delete(key);
   };
 

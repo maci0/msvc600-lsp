@@ -41,6 +41,18 @@ describe('sanitizeForLog', () => {
     expect(sanitizeForLog('a\u2066b\u2069c')).toBe('a?b?c');
   });
 
+  it('replaces spaces that render as a space, so two paths look the same', () => {
+    expect(sanitizeForLog('a\u00a0b')).toBe('a?b');
+    expect(sanitizeForLog('a\u2007b')).toBe('a?b');
+    expect(sanitizeForLog('a\u202fb')).toBe('a?b');
+  });
+
+  it('replaces the grapheme-joining and Mongolian variation selectors', () => {
+    expect(sanitizeForLog('a\u034fb')).toBe('a?b');
+    expect(sanitizeForLog('a\u180bb')).toBe('a?b');
+    expect(sanitizeForLog('a\u180eb')).toBe('a?b');
+  });
+
   it('leaves ordinary non-ASCII text alone', () => {
     const message = 'CL.EXE failed: 错误 C1083: Cannot open source file';
     expect(sanitizeForLog(message)).toBe(message);
