@@ -219,7 +219,7 @@ function runCheck(
         const stdout = decodeOutput(stdoutBytes, config.outputEncoding);
         const stderr = decodeOutput(stderrBytes, config.outputEncoding);
 
-        if (error && typeof error.code === 'string') {
+        if (error) {
           const isSpawnFailure =
             error.code === 'ENOENT' || error.code === 'EACCES' || error.code === 'ENOTDIR';
           if (isSpawnFailure && !stdout && !stderr) {
@@ -232,10 +232,7 @@ function runCheck(
           }
         }
 
-        const truncated =
-          error != null &&
-          typeof error.code === 'string' &&
-          error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
+        const truncated = error?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
         const exitCode = getExitCode(error);
         const rawOutput = stdout + '\n' + stderr;
         resolve({ stdout, stderr, exitCode, rawOutput, truncated });
@@ -300,11 +297,30 @@ export function stripByteOrderMark(content: string): string {
 }
 
 /**
+ * Writes `content` to a fresh temp file with `ext` and returns its path.
+ * The caller owns the file and must pass the path to {@link removeTempSourceFile}.
+ */
+export function createTempSourceFile(content: string, ext: string): string {
+  const tempFile = path.join(os.tmpdir(), `msvc6_lsp_${randomUUID()}${ext}`);
+  fs.writeFileSync(tempFile, stripByteOrderMark(content), { encoding: 'utf-8', mode: 0o600 });
+  return tempFile;
+}
+
+/** Deletes a temp source file. A file that is already gone is not an error. */
+export function removeTempSourceFile(tempFile: string): void {
+  try {
+    fs.unlinkSync(tempFile);
+  } catch {
+    // Already removed, or never created.
+  }
+}
+
+/**
  * Writes `content` to a temp file and runs a syntax check on it.
  * The temp file is cleaned up after the check completes.
  *
- * Exported for the test suite; the server manages its own temp files so it
- * can abort stale checks.
+ * Exported for the test suite; the server drives {@link createTempSourceFile}
+ * itself so it can abort stale checks.
  */
 export async function syntaxCheckContent(
   config: Msvc6Config,

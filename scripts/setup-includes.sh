@@ -18,28 +18,37 @@ echo "Setting up case-insensitive MSVC6 overlay at $DEST ..."
 
 mkdir -p "$DEST/include" "$DEST/lib" "$DEST/bin"
 
-# Copy all include files with both original and lowercase names
+lowercase() { echo "$1" | tr '[:upper:]' '[:lower:]'; }
+
+uppercase() { echo "$1" | tr '[:lower:]' '[:upper:]'; }
+
+# Copies every file in $1 into $2 under its own name and its lowercase name.
+copy_with_case_variants() {
+    local src="$1" dest="$2" f base lower
+    for f in "$src/"*; do
+        [ -d "$f" ] && continue
+        base=$(basename "$f")
+        lower=$(lowercase "$base")
+        cp -f "$f" "$dest/$base" 2>/dev/null || true
+        if [ "$base" != "$lower" ]; then
+            cp -f "$f" "$dest/$lower" 2>/dev/null || true
+        fi
+    done
+}
+
 echo "Copying INCLUDE files..."
-for f in "$MSVC_ROOT/INCLUDE/"*; do
-    [ -d "$f" ] && continue  # skip subdirs, handled below
-    base=$(basename "$f")
-    lower=$(echo "$base" | tr '[:upper:]' '[:lower:]')
-    cp -f "$f" "$DEST/include/$base" 2>/dev/null || true
-    if [ "$base" != "$lower" ]; then
-        cp -f "$f" "$DEST/include/$lower" 2>/dev/null || true
-    fi
-done
+copy_with_case_variants "$MSVC_ROOT/INCLUDE" "$DEST/include"
 
 # Handle subdirectories (GL/, SYS/, OBJMODEL/)
 for dir in "$MSVC_ROOT/INCLUDE/GL" "$MSVC_ROOT/INCLUDE/SYS" "$MSVC_ROOT/INCLUDE/OBJMODEL"; do
     if [ -d "$dir" ]; then
         base=$(basename "$dir")
-        lower=$(echo "$base" | tr '[:upper:]' '[:lower:]')
+        lower=$(lowercase "$base")
         mkdir -p "$DEST/include/$base" "$DEST/include/$lower"
         for f in "$dir/"*; do
             [ -d "$f" ] && continue
             fname=$(basename "$f")
-            flower=$(echo "$fname" | tr '[:upper:]' '[:lower:]')
+            flower=$(lowercase "$fname")
             cp -f "$f" "$DEST/include/$base/$fname" 2>/dev/null || true
             cp -f "$f" "$DEST/include/$base/$flower" 2>/dev/null || true
             cp -f "$f" "$DEST/include/$lower/$fname" 2>/dev/null || true
@@ -63,35 +72,16 @@ for truncated in "${!STL_MAP[@]}"; do
     full="${STL_MAP[$truncated]}"
     if [ -f "$DEST/include/$truncated" ]; then
         cp -f "$DEST/include/$truncated" "$DEST/include/$full"
-        FULL_UPPER=$(echo "$full" | tr '[:lower:]' '[:upper:]')
-        cp -f "$DEST/include/$truncated" "$DEST/include/$FULL_UPPER"
+        cp -f "$DEST/include/$truncated" "$DEST/include/$(uppercase "$full")"
         echo "  $truncated -> $full"
     fi
 done
 
-# Copy LIB files
 echo "Copying LIB files..."
-for f in "$MSVC_ROOT/LIB/"*; do
-    [ -d "$f" ] && continue
-    base=$(basename "$f")
-    lower=$(echo "$base" | tr '[:upper:]' '[:lower:]')
-    cp -f "$f" "$DEST/lib/$base" 2>/dev/null || true
-    if [ "$base" != "$lower" ]; then
-        cp -f "$f" "$DEST/lib/$lower" 2>/dev/null || true
-    fi
-done
+copy_with_case_variants "$MSVC_ROOT/LIB" "$DEST/lib"
 
-# Copy BIN files
 echo "Copying BIN files..."
-for f in "$MSVC_ROOT/BIN/"*; do
-    [ -d "$f" ] && continue
-    base=$(basename "$f")
-    lower=$(echo "$base" | tr '[:upper:]' '[:lower:]')
-    cp -f "$f" "$DEST/bin/$base" 2>/dev/null || true
-    if [ "$base" != "$lower" ]; then
-        cp -f "$f" "$DEST/bin/$lower" 2>/dev/null || true
-    fi
-done
+copy_with_case_variants "$MSVC_ROOT/BIN" "$DEST/bin"
 
 echo "Done. MSVC6 overlay created at $DEST"
 printf '  Include: %s\n' 'C:\msvc6\include'

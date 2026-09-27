@@ -68,6 +68,7 @@ Pass these in your client's `initializationOptions`:
 | `warnLevel` | `0-4` | `4` | Warning level (`/W0`–`/W4`) |
 | `additionalFlags` | `string[]` | `[]` | Extra flags forwarded verbatim |
 | `wineExecutable` | `string` | `"wine"` | Path to the Wine binary |
+| `outputEncoding` | `string` | `"utf8"` | Code page CL.EXE writes diagnostics in, e.g. `cp1252`; unknown labels are dropped |
 | `useWine` | `boolean` | `true` on non-Windows | Whether to invoke CL.EXE through Wine |
 | `outputEncoding` | `string` | `"utf8"` | Label `TextDecoder` uses on CL.EXE output. Use the toolchain's console code page (e.g. `cp1252`) if diagnostics come out as mojibake. An unknown label is rejected at load, since it would otherwise throw at decode time |
 | `checkTimeoutMs` | `number` | `30000` | Milliseconds before a check is killed. A hung Wine is worse than no diagnostics |
