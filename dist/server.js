@@ -77,9 +77,46 @@ const MAX_CONCURRENT_CHECKS = 2;
  * previous one, so a superseded edit never reaches the compiler.
  */
 const validationQueue = new task_queue_1.TaskQueue(MAX_CONCURRENT_CHECKS);
+/** Diagnostic code used for failures of the check itself, not of the source file. */
+const TOOL_ERROR_CODE = 'msvc600-check-failed';
+/** Range covering a whole first line, where tool-failure diagnostics are anchored. */
+const DOCUMENT_START = {
+    start: { line: 0, character: 0 },
+    end: { line: 0, character: 0 },
+};
 /** Reports a caught error to the client log with control characters removed. */
 function logValidationError(context, e) {
     connection.console.error((0, logging_1.sanitizeForLog)(`${context}: ${String(e)}`));
+}
+/**
+ * Whether `e` came from the compiler run rather than from staging the scratch
+ * source. A rejection raised by `syntaxCheck` carries no errno, while the
+ * filesystem failures that abort the write do.
+ */
+function isCheckFailure(e) {
+    return !(e instanceof Error && 'code' in e);
+}
+/**
+ * Reports a failure of the syntax check as a diagnostic on the document.
+ *
+ * A check that never completed says nothing about the file, so publishing an
+ * empty diagnostic list would read as "no problems found" and silently drop
+ * whatever the user was already seeing.
+ */
+function publishCheckFailure(uri, message) {
+    connection.console.error((0, logging_1.sanitizeForLog)(`MSVC6 syntax check failed for ${uri}: ${message}`));
+    connection.sendDiagnostics({
+        uri,
+        diagnostics: [
+            {
+                range: DOCUMENT_START,
+                severity: node_1.DiagnosticSeverity.Error,
+                code: TOOL_ERROR_CODE,
+                source: 'msvc6',
+                message,
+            },
+        ],
+    });
 }
 connection.onInitialize((params) => {
     const capabilities = params.capabilities;
@@ -258,24 +295,37 @@ async function runValidation(uri, handle, content, tempFile, signal) {
         const result = await (0, compiler_1.syntaxCheck)(config, tempFile, { signal });
         if (!handle.isCurrent())
             return;
+        if (result.timedOut) {
+            publishCheckFailure(uri, `CL.EXE did not finish within ${compiler_1.COMPILE_TIMEOUT_MS} ms and was killed; ` +
+                `diagnostics for this file are unavailable, not empty.`);
+            return;
+        }
         const parsed = (0, diagnostics_1.parseDiagnostics)(result.rawOutput);
         connection.sendDiagnostics({ uri, diagnostics: (0, diagnostics_1.toLspDiagnostics)(parsed, tempFile) });
+        if (result.truncated) {
+            connection.console.error((0, logging_1.sanitizeForLog)(`CL.EXE output for ${uri} exceeded ${compiler_1.MAX_OUTPUT_BYTES} bytes; ` +
+                'reported diagnostics are incomplete'));
+        }
     }
     catch (e) {
-        if (e instanceof compiler_1.DocumentTooLargeError) {
-            if (handle.isCurrent()) {
-                connection.sendDiagnostics({ uri, diagnostics: [tooLargeDiagnostic(e)] });
-            }
-            return;
-        }
         if (signal.aborted)
             return;
-        if (handle.isCurrent()) {
-            connection.sendDiagnostics({
-                uri,
-                diagnostics: [(0, diagnostics_1.toFailureDiagnostic)(`Syntax check failed: ${errorMessage(e)}`)],
-            });
+        if (!handle.isCurrent())
+            return;
+        if (e instanceof compiler_1.DocumentTooLargeError) {
+            connection.sendDiagnostics({ uri, diagnostics: [tooLargeDiagnostic(e)] });
+            return;
         }
+        if (isCheckFailure(e)) {
+            publishCheckFailure(uri, `Could not run the MSVC6 syntax check: ${errorMessage(e)}`);
+            return;
+        }
+        // The scratch source never reached the compiler, so the failure is local
+        // to this run and not evidence that the file is clean.
+        connection.sendDiagnostics({
+            uri,
+            diagnostics: [(0, diagnostics_1.toFailureDiagnostic)(`Syntax check failed: ${errorMessage(e)}`)],
+        });
         connection.console.error(`Validation error (${uri}): ${String(e)}`);
     }
     finally {
