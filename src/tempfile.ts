@@ -5,8 +5,13 @@ import * as path from 'path';
 import { encodeSourceText } from './encoding';
 import { SCRATCH_EXTENSIONS } from './config';
 
-/** Prefix shared by every temp file the server creates, so leaked files are identifiable. */
-const TEMP_PREFIX = 'msvc6_lsp_';
+/**
+ * Prefix shared by every temp file the server creates, so leaked files are
+ * identifiable. Both the store below and the compiler's own scratch-source
+ * writer name files with it, and the sweep that reclaims them matches on it: a
+ * second copy of this string would leave one writer's orphans unswept forever.
+ */
+export const TEMP_PREFIX = 'msvc6_lsp_';
 
 /** Temp files hold unsaved editor buffers — 0o600 keeps other local users out. */
 const TEMP_FILE_MODE = 0o600;
