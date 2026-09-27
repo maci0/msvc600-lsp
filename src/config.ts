@@ -5,14 +5,18 @@ import { sanitizeForLog } from './logging';
 /** Valid MSVC 6.0 warning levels: 0 (none) through 4 (most verbose). */
 export type WarnLevel = 0 | 1 | 2 | 3 | 4;
 
-/**
- * Supported C/C++ file extensions for syntax checking.
- * Translation units (.c, .cpp, .cxx, .cc) are compiled directly.
- * Headers (.h, .hpp, .hxx) are supported but may produce false positives
- * when compiled as standalone translation units.
- */
+/** Translation units CL.EXE is told to treat as C (`/TC`). */
 export const C_EXTENSIONS: readonly string[] = ['.c'];
+
+/**
+ * Extensions treated as C++ (`/TP`): the translation units plus the headers
+ * that name their own language. A header compiled as a standalone translation
+ * unit may report errors a real build would not, since the `.c` file that
+ * supplies its include guards is not part of the check.
+ */
 export const CPP_EXTENSIONS: readonly string[] = ['.cpp', '.cxx', '.cc', '.hpp', '.hxx'];
+
+/** Every extension the server checks; `.h` is included but gets no language flag. */
 export const ALL_EXTENSIONS: readonly string[] = [...C_EXTENSIONS, ...CPP_EXTENSIONS, '.h'];
 
 /**
