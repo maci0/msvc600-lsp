@@ -12,6 +12,10 @@ package version, not a published artifact.
 
 ### Fixed
 
+- The tree compiles again. `server.ts` imported `createDebouncer` and `realScheduler` from a
+  `scheduler.ts` that was not in the tree, so every build and type check failed on a missing
+  module. The module now exists, holding the timer seam and the per-URI debouncer, and
+  `tests/scheduler.test.ts` pins the coalescing, per-key cancel, and cancel-all behavior.
 - The startup sweep no longer removes a scratch source a live check is still reading.
   `checkTimeoutMs` is configurable, so a check can outlive the one-hour age the sweep
   hardcoded, and a second server process starting up would unlink the file a check in the

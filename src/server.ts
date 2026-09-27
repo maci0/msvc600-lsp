@@ -30,6 +30,7 @@ import {
 } from './config';
 import {
   syntaxCheck,
+  CompileResult,
   MAX_CONCURRENT_CHECKS,
 } from './compiler';
 import {
@@ -103,20 +104,20 @@ function logValidationError(context: string, e: unknown): void {
  * A Wine executable given as a bare command name is left to `PATH`, so it is
  * not checked here.
  */
-function warnAboutMissingExecutables(config: Msvc6Config): string[] {
+function warnAboutMissingExecutables(effective: Msvc6Config): string[] {
   const warnings: string[] = [];
 
-  if (!fs.existsSync(config.clPath)) {
+  if (!fs.existsSync(effective.clPath)) {
     warnings.push(
-      `msvc600-lsp: clPath ${config.clPath} does not exist; every check will fail to spawn CL.EXE ` +
+      `msvc600-lsp: clPath ${effective.clPath} does not exist; every check will fail to spawn CL.EXE ` +
         '(set msvcBasePath or clPath in initializationOptions or MSVC600_*)',
     );
   }
 
-  if (config.useWine && path.basename(config.wineExecutable) !== config.wineExecutable) {
-    if (!fs.existsSync(config.wineExecutable)) {
+  if (effective.useWine && path.basename(effective.wineExecutable) !== effective.wineExecutable) {
+    if (!fs.existsSync(effective.wineExecutable)) {
       warnings.push(
-        `msvc600-lsp: wineExecutable ${config.wineExecutable} does not exist; every check will fail to spawn it`,
+        `msvc600-lsp: wineExecutable ${effective.wineExecutable} does not exist; every check will fail to spawn it`,
       );
     }
   }
@@ -357,6 +358,66 @@ function scheduleValidation(textDocument: TextDocument): void {
   validationQueue.submit(uri, (signal) => runValidation(uri, handle, content, ext, signal));
 }
 
+/** Diagnostics for one finished run, plus the lines that explain an incomplete one. */
+interface RunOutcome {
+  readonly diagnostics: Diagnostic[];
+  /** Empty when the run's own result speaks for itself. */
+  readonly logLines: readonly string[];
+}
+
+/**
+ * Turns one finished CL.EXE run into the diagnostics to publish.
+ *
+ * Each failure mode adds a diagnostic of its own next to whatever the parser
+ * recovered, because every one of them leaves a list that would otherwise read
+ * as a complete check on a clean file.
+ */
+function diagnosticsForRun(result: CompileResult, tempFile: string, uri: string): RunOutcome {
+  const diagnostics = toLspDiagnostics(parseDiagnostics(result.rawOutput), tempFile);
+  const logLines: string[] = [];
+
+  // A run cut short leaves a prefix of the real diagnostics. Publishing that
+  // prefix alone would tell the client the rest of the file is clean, so the
+  // incompleteness travels with it.
+  if (result.killedBySignal !== null) {
+    logLines.push(`CL.EXE for ${uri} was terminated by ${result.killedBySignal}`);
+    diagnostics.push(
+      toFailureDiagnostic(
+        `CL.EXE was terminated by ${result.killedBySignal} before it finished; ` +
+          'the diagnostics above are incomplete.',
+      ),
+    );
+  }
+
+  if (result.truncated) {
+    logLines.push(
+      `CL.EXE output for ${uri} exceeded the ${config.maxOutputBytes} byte cap; ` +
+        'reported diagnostics are incomplete',
+    );
+    diagnostics.push(
+      toFailureDiagnostic(
+        `CL.EXE output for this file exceeded the ${config.maxOutputBytes} byte cap ` +
+          'and was truncated; the diagnostics above are incomplete.',
+      ),
+    );
+  }
+
+  // A non-zero exit with nothing to report for this file means the run failed
+  // in a way the parser does not recognise (a bad command line, a Wine error, a
+  // failure in an included header). Publishing the empty list would tell the
+  // client the file is clean on the strength of a failed run.
+  if (diagnostics.length === 0 && result.exitCode !== 0) {
+    diagnostics.push(
+      toFailureDiagnostic(
+        `CL.EXE exited with code ${result.exitCode} without reporting a diagnostic ` +
+          `for this file. Its first line of output was: ${outputExcerpt(result.rawOutput)}`,
+      ),
+    );
+  }
+
+  return { diagnostics, logLines };
+}
+
 async function runValidation(
   uri: string,
   handle: ValidationHandle,
@@ -384,53 +445,11 @@ async function runValidation(
       return;
     }
 
-    const parsed = parseDiagnostics(result.rawOutput);
-    const diagnostics = toLspDiagnostics(parsed, tempFile);
-
-    // A run cut short leaves a prefix of the real diagnostics. Publishing that
-    // prefix alone would tell the client the rest of the file is clean, so the
-    // incompleteness travels with it.
-    if (result.killedBySignal !== null) {
-      connection.console.error(
-        sanitizeForLog(`CL.EXE for ${uri} was terminated by ${result.killedBySignal}`),
-      );
-      diagnostics.push(
-        toFailureDiagnostic(
-          `CL.EXE was terminated by ${result.killedBySignal} before it finished; ` +
-            'the diagnostics above are incomplete.',
-        ),
-      );
+    const outcome = diagnosticsForRun(result, tempFile, uri);
+    for (const line of outcome.logLines) {
+      connection.console.error(sanitizeForLog(line));
     }
-
-    if (result.truncated) {
-      connection.console.error(
-        sanitizeForLog(
-          `CL.EXE output for ${uri} exceeded the ${config.maxOutputBytes} byte cap; ` +
-            'reported diagnostics are incomplete',
-        ),
-      );
-      diagnostics.push(
-        toFailureDiagnostic(
-          `CL.EXE output for this file exceeded the ${config.maxOutputBytes} byte cap ` +
-            'and was truncated; the diagnostics above are incomplete.',
-        ),
-      );
-    }
-
-    // A non-zero exit with nothing to report for this file means the run
-    // failed in a way the parser does not recognise (a bad command line, a
-    // Wine error, a failure in an included header). Publishing the empty list
-    // would tell the client the file is clean on the strength of a failed run.
-    if (diagnostics.length === 0 && result.exitCode !== 0) {
-      diagnostics.push(
-        toFailureDiagnostic(
-          `CL.EXE exited with code ${result.exitCode} without reporting a diagnostic ` +
-            `for this file. Its first line of output was: ${outputExcerpt(result.rawOutput)}`,
-        ),
-      );
-    }
-
-    connection.sendDiagnostics({ uri, diagnostics });
+    connection.sendDiagnostics({ uri, diagnostics: outcome.diagnostics });
   } catch (e) {
     if (signal.aborted) return;
     if (!handle.isCurrent()) return;

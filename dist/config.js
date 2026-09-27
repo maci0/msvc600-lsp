@@ -309,7 +309,7 @@ const ENV_KEYS = {
     CHECK_TIMEOUT_MS: 'checkTimeoutMs',
     MAX_OUTPUT_BYTES: 'maxOutputBytes',
 };
-/** Environment variables parsed as integers, which is every scalar but the strings. */
+/** Environment variables parsed as integers. The other scalars are a string and a boolean. */
 const ENV_INT_KEYS = new Set(['WARN_LEVEL', 'CHECK_TIMEOUT_MS', 'MAX_OUTPUT_BYTES']);
 /** Environment variables parsed as lists. */
 const ENV_LIST_KEYS = new Set(['INCLUDE_PATHS', 'ADDITIONAL_FLAGS']);

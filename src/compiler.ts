@@ -99,14 +99,6 @@ function getExitCode(error: Error | null): number {
 }
 
 /**
- * Decodes CL.EXE output bytes. A `TextDecoder` never throws on malformed
- * input, so undecodable bytes become U+FFFD rather than aborting the check.
- */
-function decodeOutput(bytes: Buffer, decoder: TextDecoder): string {
-  return decoder.decode(bytes);
-}
-
-/**
  * Whether the child was killed by the exec timeout rather than by the caller.
  * A timeout kill carries no string `code` (it is `null`) and no `status`, so
  * only `killed` distinguishes it from an ordinary non-zero exit.
@@ -219,8 +211,10 @@ function runCheck(
         encoding: 'buffer',
       },
       (error, stdoutBytes, stderrBytes) => {
-        const stdout = decodeOutput(stdoutBytes, decoder);
-        const stderr = decodeOutput(stderrBytes, decoder);
+        // A TextDecoder never throws on malformed input, so undecodable bytes
+        // become U+FFFD rather than aborting the check.
+        const stdout = decoder.decode(stdoutBytes);
+        const stderr = decoder.decode(stderrBytes);
 
         if (error) {
           const isSpawnFailure =

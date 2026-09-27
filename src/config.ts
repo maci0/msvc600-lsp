@@ -179,8 +179,8 @@ export function validateConfig(raw: unknown): ConfigValidation {
   const takeStringArray = (key: 'includePaths' | 'additionalFlags'): void => {
     const value = obj[key];
     if (value === undefined) return;
-    if (Array.isArray(value) && value.every((e: unknown) => typeof e === 'string')) {
-      result[key] = [...(value as string[])];
+    if (Array.isArray(value) && value.every((e): e is string => typeof e === 'string')) {
+      result[key] = [...value];
     } else {
       issues.push({ key, message: `expected an array of strings, got ${describe(value)}` });
     }
@@ -356,7 +356,7 @@ const ENV_KEYS: Readonly<Record<string, keyof Msvc6Config>> = {
   MAX_OUTPUT_BYTES: 'maxOutputBytes',
 };
 
-/** Environment variables parsed as integers, which is every scalar but the strings. */
+/** Environment variables parsed as integers. The other scalars are a string and a boolean. */
 const ENV_INT_KEYS: ReadonlySet<string> = new Set(['WARN_LEVEL', 'CHECK_TIMEOUT_MS', 'MAX_OUTPUT_BYTES']);
 
 /** Environment variables parsed as lists. */

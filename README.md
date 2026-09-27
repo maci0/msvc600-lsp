@@ -174,9 +174,8 @@ src/
 ├── diagnostics.ts       # MSVC output parser → LSP Diagnostic conversion
 ├── encoding.ts          # Source preparation: BOM strip, lone surrogates, UTF-8 bytes
 ├── logging.ts           # Control-character stripping for the client log
-├── scheduler.ts         # Timer boundary: the debounce that coalesces edit bursts
+├── scheduler.ts         # Timer seam: per-URI debounce over the platform timer
 ├── server.ts            # LSP server lifecycle, debouncing, abort handling
-├── scheduler.ts         # Debounce boundary over the platform timer
 ├── task-queue.ts        # Bounded per-URI cancellation queue for validations
 ├── tempfile.ts          # Scratch-source boundary: staging, 0600 writes, stale-file sweep
 ├── validation-state.ts  # Per-URI generation counter deciding which result may publish
@@ -191,12 +190,17 @@ src/
 
 ## Supported File Types
 
-| Extension | Language | CL.EXE Flag |
-|-----------|----------|-------------|
-| `.c` | C | `/TC` |
-| `.cpp`, `.cxx`, `.cc` | C++ | `/TP` |
-| `.hpp`, `.hxx` | C++ header | `/TP` |
-| `.h` | C/C++ header | (none — inferred by CL.EXE) |
+| Extension | Language | Staged as | CL.EXE Flag |
+|-----------|----------|-----------|-------------|
+| `.c` | C | `.c` | `/TC` |
+| `.cpp`, `.cxx`, `.cc` | C++ | `.cpp` | `/TP` |
+| `.hpp`, `.hxx` | C++ header | `.cpp` | `/TP` |
+| `.h` | C/C++ header | `.c` | `/TC` |
+
+A buffer is written to a scratch file before CL.EXE sees it, and the `/TC` or `/TP`
+flag follows that scratch name, not the name the editor gave the buffer. A `.h`
+buffer is therefore checked as C, and a header meant for C++ is reported through
+its own errors rather than through the extension.
 
 ## Limits
 
