@@ -46,7 +46,7 @@ Run one file or one test:
 
 ```bash
 bun run test tests/diagnostics.test.ts
-bun run test -t 'groupByFile'
+bun run test -t 'toLspDiagnostics'
 ```
 
 ## Conventions

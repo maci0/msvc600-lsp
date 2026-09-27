@@ -5,10 +5,8 @@ import * as os from 'os';
 import * as path from 'path';
 import {
   syntaxCheck,
-  syntaxCheckContent,
   buildArgs,
   stripByteOrderMark,
-  createTempSourcePath,
   sweepStaleTempFiles,
   createTempSource,
   DocumentTooLargeError,
@@ -113,46 +111,38 @@ describe('stripByteOrderMark', () => {
   });
 });
 
-describeWithToolchain('syntaxCheckContent', () => {
+describeWithToolchain('syntaxCheck on a scratch source', () => {
+  const scratch: string[] = [];
+
+  /** Writes `content` to a scratch file the way the server does, then checks it. */
+  async function check(content: string, ext: string) {
+    const tempFile = createTempSource(content, ext);
+    scratch.push(tempFile);
+    return syntaxCheck(testConfig(), tempFile);
+  }
+
+  afterEach(() => {
+    for (const file of scratch.splice(0)) fs.rmSync(file, { force: true });
+  });
+
   it('checks content that starts with a UTF-8 BOM', async () => {
-    const result = await syntaxCheckContent(
-      testConfig(),
-      '\ufeffint main(void) { return 0; }\n',
-      'c',
-    );
+    const result = await check('\ufeffint main(void) { return 0; }\n', '.c');
     expect(result.exitCode).toBe(0);
   });
+
   it('checks C content passed as string', async () => {
-    const content = 'int main(void) { return 0; }\n';
-    const result = await syntaxCheckContent(testConfig(), content, 'c');
+    const result = await check('int main(void) { return 0; }\n', '.c');
     expect(result.exitCode).toBe(0);
   });
 
   it('detects errors in C content string', async () => {
-    const content = 'int main(void) { int x = "bad"; return 0; }\n';
-    const result = await syntaxCheckContent(testConfig(), content, 'c');
+    const result = await check('int main(void) { int x = "bad"; return 0; }\n', '.c');
     expect(result.rawOutput).toContain('C4047');
   });
 
-  it('uses .cpp extension for cpp language id', async () => {
-    const content = 'class X {};\nint main() { return 0; }\n';
-    const result = await syntaxCheckContent(testConfig(), content, 'cpp');
+  it('compiles a .cpp scratch file as C++', async () => {
+    const result = await check('class X {};\nint main() { return 0; }\n', '.cpp');
     expect(result.exitCode).toBe(0);
-    expect(result.tempFile).toContain('.cpp');
-  });
-
-  it('cleans up temp file after completion', async () => {
-    const fs = await import('fs');
-    const content = 'int main(void) { return 0; }\n';
-    const result = await syntaxCheckContent(testConfig(), content, 'c');
-    expect(fs.existsSync(result.tempFile)).toBe(false);
-  });
-
-  it('uses .c extension for c language id', async () => {
-    const content = 'int main(void) { return 0; }\n';
-    const result = await syntaxCheckContent(testConfig(), content, 'c');
-    expect(result.tempFile).toContain('.c');
-    expect(result.tempFile).not.toContain('.cpp');
   });
 });
 
@@ -339,17 +329,6 @@ describeWithToolchain('syntaxCheck — abort signal', () => {
     await expect(
       syntaxCheck(testConfig(), path.join(FIXTURES, 'valid.c'), { signal: abort.signal }),
     ).rejects.toThrow();
-  });
-});
-
-describe('createTempSourcePath', () => {
-  it('picks the extension from the language id', () => {
-    expect(path.basename(createTempSourcePath('cpp'))).toMatch(/^msvc6_lsp_.+\.cpp$/);
-    expect(path.basename(createTempSourcePath('c'))).toMatch(/^msvc6_lsp_.+\.c$/);
-  });
-
-  it('returns a different path on every call', () => {
-    expect(createTempSourcePath('c')).not.toBe(createTempSourcePath('c'));
   });
 });
 

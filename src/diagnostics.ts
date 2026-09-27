@@ -141,27 +141,7 @@ export function toFailureDiagnostic(message: string): Diagnostic {
  * NFD by the filesystem (macOS) still matches the NFC spelling an editor or
  * database supplies.
  */
-export function normalizeForComparison(filePath: string): string {
+function normalizeForComparison(filePath: string): string {
   return filePath.normalize('NFC').toLowerCase().replace(/\\/g, '/');
 }
 
-/**
- * Groups diagnostics by normalized file path for batch processing.
- *
- * Exported for the test suite; the server filters to a single file instead.
- */
-export function groupByFile(
-  diagnostics: ParsedDiagnostic[],
-): Map<string, ParsedDiagnostic[]> {
-  const groups = new Map<string, ParsedDiagnostic[]>();
-  for (const d of diagnostics) {
-    const key = normalizeForComparison(d.file);
-    const existing = groups.get(key);
-    if (existing) {
-      existing.push(d);
-    } else {
-      groups.set(key, [d]);
-    }
-  }
-  return groups;
-}

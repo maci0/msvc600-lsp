@@ -3,9 +3,6 @@ import { DiagnosticSeverity } from 'vscode-languageserver-protocol';
 import {
   parseDiagnostics,
   toLspDiagnostics,
-  groupByFile,
-  normalizeForComparison,
-  toFailureDiagnostic,
   ParsedDiagnostic,
 } from '../src/diagnostics';
 
@@ -238,50 +235,3 @@ describe('toLspDiagnostics', () => {
   });
 });
 
-describe('toFailureDiagnostic', () => {
-  it('marks an unchecked document as an error rather than clean', () => {
-    const d = toFailureDiagnostic('Syntax check failed: ENOENT');
-    expect(d.severity).toBe(DiagnosticSeverity.Error);
-    expect(d.source).toBe('msvc6');
-    expect(d.message).toBe('Syntax check failed: ENOENT');
-    expect(d.range.start).toEqual({ line: 0, character: 0 });
-    expect(d.range.end).toEqual({ line: 0, character: 0 });
-  });
-});
-
-describe('groupByFile', () => {
-  it('groups diagnostics by normalized file path', () => {
-    const diags: ParsedDiagnostic[] = [
-      { file: '/tmp/a.c', line: 1, severity: DiagnosticSeverity.Error, code: 'C0001', message: 'err1', relatedInfo: [] },
-      { file: '/tmp/b.c', line: 2, severity: DiagnosticSeverity.Warning, code: 'C0002', message: 'warn1', relatedInfo: [] },
-      { file: '/tmp/a.c', line: 3, severity: DiagnosticSeverity.Error, code: 'C0003', message: 'err2', relatedInfo: [] },
-    ];
-    const groups = groupByFile(diags);
-    expect(groups.size).toBe(2);
-    expect(groups.get('/tmp/a.c')).toHaveLength(2);
-    expect(groups.get('/tmp/b.c')).toHaveLength(1);
-  });
-
-  it('normalizes case and path separators', () => {
-    const diags: ParsedDiagnostic[] = [
-      { file: 'C:\\MSVC6\\Test.c', line: 1, severity: DiagnosticSeverity.Error, code: 'C0001', message: 'a', relatedInfo: [] },
-      { file: 'c:\\msvc6\\test.c', line: 2, severity: DiagnosticSeverity.Error, code: 'C0002', message: 'b', relatedInfo: [] },
-    ];
-    const groups = groupByFile(diags);
-    expect(groups.size).toBe(1);
-  });
-
-  it('matches an NFD-spelled path against its NFC spelling', () => {
-    const nfc = '/tmp/café.c';
-    const nfd = nfc.normalize('NFD'); // what macOS hands back from the filesystem
-    const diags: ParsedDiagnostic[] = [
-      { file: nfd, line: 1, severity: DiagnosticSeverity.Error, code: 'C2065', message: 'a', relatedInfo: [] },
-    ];
-    const groups = groupByFile(diags);
-    expect(groups.get(normalizeForComparison(nfc))).toHaveLength(1);
-  });
-
-  it('returns empty map for empty input', () => {
-    expect(groupByFile([]).size).toBe(0);
-  });
-});

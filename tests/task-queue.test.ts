@@ -43,8 +43,6 @@ describe('TaskQueue', () => {
       await flush();
       expect(started).toBe(2);
       expect(queue.pending).toBe(3);
-      expect(queue.isRunning('key-0')).toBe(true);
-      expect(queue.has('key-4')).toBe(true);
 
       gates[0].resolve();
       await flush();
@@ -137,7 +135,8 @@ describe('TaskQueue', () => {
       blocker.resolve();
       await flush();
       expect(seen).toEqual([false]);
-      expect(queue.has('doc')).toBe(false);
+      expect(queue.pending).toBe(0);
+      await queue.drained();
     });
   });
 

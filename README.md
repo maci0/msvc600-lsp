@@ -127,14 +127,15 @@ Other fields (especially `additionalFlags`) cannot be changed at runtime, so a r
 
 ```
 src/
-├── compiler.ts         # CL.EXE invocation (syntax-check mode)
+├── compiler.ts         # CL.EXE invocation (syntax-check mode) and scratch sources
 ├── config.ts           # Configuration types and validation
 ├── diagnostics.ts      # MSVC output parser → LSP Diagnostic conversion
+├── logging.ts          # Control-character stripping for the client log
 ├── scheduler.ts        # Debounce timer boundary (real timer, or a stepped one in simulation)
 ├── server.ts           # LSP server lifecycle, debouncing, abort handling
-├── task-queue.ts       # One in-flight validation per document
+├── task-queue.ts       # Bounded per-URI cancellation queue for validations
 ├── tempfile.ts         # Temp-file boundary: real filesystem, or an in-memory simulated store
-├── validation-state.ts # Generation counter that discards stale results
+├── validation-state.ts # Per-URI generation counter deciding which result may publish
 └── wine-path.ts        # POSIX ↔ Wine path conversion
 ```
 

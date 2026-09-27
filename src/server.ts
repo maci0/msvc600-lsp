@@ -27,14 +27,11 @@ import {
 } from './config';
 import {
   syntaxCheck,
-  createTempSourcePath,
-  removeTempSourceFile,
+  createTempSource,
   sweepStaleTempFiles,
   DocumentTooLargeError,
-  MAX_SOURCE_BYTES,
   COMPILE_TIMEOUT_MS,
   MAX_OUTPUT_BYTES,
-  stripByteOrderMark,
 } from './compiler';
 import { parseDiagnostics, toLspDiagnostics, toFailureDiagnostic, LSP_UINT_MAX } from './diagnostics';
 import { sanitizeForLog } from './logging';
@@ -286,50 +283,37 @@ function errorMessage(e: unknown): string {
  * even while it waits for a free slot.
  */
 function scheduleValidation(textDocument: TextDocument): void {
-  const ext = getDocumentExtension(textDocument);
-  if (!ALL_EXTENSIONS.includes(ext)) {
+  const documentExt = getDocumentExtension(textDocument);
+  if (!ALL_EXTENSIONS.includes(documentExt)) {
     return;
   }
 
   const uri = textDocument.uri;
   const handle = validationSequencer.begin(uri);
 
-  // A .h document carries the language id its client assigned; every other
-  // supported extension is decided by the extension itself.
-  const langId = CPP_EXTENSIONS.includes(ext) || textDocument.languageId === 'cpp' ? 'cpp' : 'c';
-  const tempFile = createTempSourcePath(langId);
-  // Content and temp path are snapshotted at submission so a queued check
-  // never re-reads a document that has since changed.
+  const ext =
+    CPP_EXTENSIONS.includes(documentExt) || textDocument.languageId === 'cpp' ? '.cpp' : '.c';
+
+  // Content is snapshotted at submission so a queued check never re-reads a
+  // document that has since changed.
   const content = textDocument.getText();
 
-  validationQueue.submit(uri, (signal) => runValidation(uri, handle, content, tempFile, signal));
+  validationQueue.submit(uri, (signal) => runValidation(uri, handle, content, ext, signal));
 }
 
 async function runValidation(
   uri: string,
   handle: ValidationHandle,
   content: string,
-  tempFile: string,
+  ext: string,
   signal: AbortSignal,
 ): Promise<void> {
+  let tempFile: string | undefined;
   try {
     // A newer edit aborted this one while it sat in the queue.
     if (signal.aborted) return;
 
-    const body = stripByteOrderMark(content);
-    const byteLength = Buffer.byteLength(body, 'utf-8');
-    if (byteLength > MAX_SOURCE_BYTES) {
-      throw new DocumentTooLargeError(byteLength);
-    }
-
-    // The create is exclusive (`wx`): a path already taken in the shared temp
-    // directory is an error rather than something to truncate, so a file or
-    // symlink planted by another local user is never written through.
-    fs.writeFileSync(tempFile, body, {
-      encoding: 'utf-8',
-      mode: 0o600,
-      flag: 'wx',
-    });
+    tempFile = createTempSource(content, ext);
 
     const result = await syntaxCheck(config, tempFile, { signal });
 
@@ -377,7 +361,13 @@ async function runValidation(
     });
     connection.console.error(`Validation error (${uri}): ${String(e)}`);
   } finally {
-    removeTempSourceFile(tempFile);
+    if (tempFile !== undefined) {
+      try {
+        fs.unlinkSync(tempFile);
+      } catch {
+        // Temp file may already be gone.
+      }
+    }
   }
 }
 

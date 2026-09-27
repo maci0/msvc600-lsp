@@ -14,8 +14,6 @@
  * the reopened document is issued a strictly higher generation.
  */
 export interface ValidationHandle {
-  /** URI the handle was issued for. */
-  readonly uri: string;
   /** Process-unique, never-reused number identifying this validation attempt. */
   readonly generation: number;
   /** True while no newer validation has been started for this URI. */
@@ -32,7 +30,6 @@ export class ValidationSequencer {
     const generation = ++this.issued;
     this.latest.set(uri, generation);
     return {
-      uri,
       generation,
       isCurrent: () => this.latest.get(uri) === generation,
     };

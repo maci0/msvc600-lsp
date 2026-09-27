@@ -147,7 +147,7 @@ export function createTempSource(content: string, ext: string): string {
     throw new DocumentTooLargeError(byteLength);
   }
 
-  const tempFile = path.join(os.tmpdir(), `msvc6_lsp_${randomUUID()}${ext}`);
+  const tempFile = path.join(os.tmpdir(), `${TEMP_SOURCE_PREFIX}${randomUUID()}${ext}`);
   fs.writeFileSync(tempFile, body, { encoding: 'utf-8', mode: 0o600, flag: 'wx' });
   return tempFile;
 }
@@ -279,16 +279,6 @@ function runCheck(
       },
     );
   });
-}
-
-/**
- * Returns a fresh, unused path for a scratch source file. The random name
- * makes two concurrent checks of the same document independent rather than
- * overwriting each other's input.
- */
-export function createTempSourcePath(languageId: string): string {
-  const ext = languageId === 'cpp' ? '.cpp' : '.c';
-  return path.join(os.tmpdir(), `${TEMP_SOURCE_PREFIX}${randomUUID()}${ext}`);
 }
 
 /**
