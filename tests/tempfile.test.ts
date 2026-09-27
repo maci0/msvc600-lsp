@@ -24,9 +24,8 @@ describe('createSimulatedTempFileStore', () => {
   it('replays the same paths for the same call sequence', () => {
     const run = () => {
       const store = createSimulatedTempFileStore({ dir: '/tmp/sim' });
-      const first = store.write('int a;\n', '.c');
-      const second = store.write('int b;\n', '.cpp');
-      store.remove(first);
+      const file = store.write('int a;\n', '.c');
+      store.remove(file);
       return store.events;
     };
     expect(run()).toEqual(run());

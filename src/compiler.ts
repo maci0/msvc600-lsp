@@ -1,9 +1,11 @@
-import { execFile } from 'child_process';
+import { spawn, ChildProcess } from 'child_process';
 import { randomUUID } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { Readable } from 'stream';
 import { Msvc6Config, CPP_EXTENSIONS, C_EXTENSIONS } from './config';
+import { Semaphore } from './concurrency';
 import { toWinePath } from './wine-path';
 import { TempFileStore, createSystemTempFileStore } from './tempfile';
 
@@ -79,23 +81,6 @@ export function buildArgs(config: Msvc6Config, filePath: string): string[] {
 }
 
 /**
- * Extracts the child process exit code from an `execFile` callback error.
- *
- * Node.js `ExecException` always sets `error.code` to a *string* (e.g.
- * `'ENOENT'`, `'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'`). The numeric exit
- * code — when the child ran but returned non-zero — is exposed on the
- * non-standard `status` property set by `child_process` internals.
- * We check `status` first to avoid silently flattening every CL.EXE
- * failure to exit code 1.
- */
-function getExitCode(error: Error | null): number {
-  if (!error) return 0;
-  const asExec = error as NodeJS.ErrnoException & { status?: number };
-  if (typeof asExec.status === 'number') return asExec.status;
-  return 1;
-}
-
-/**
  * Decodes CL.EXE output bytes. A `TextDecoder` never throws on malformed
  * input, so undecodable bytes become U+FFFD rather than aborting the check.
  */
@@ -135,25 +120,8 @@ export function createTempSource(content: string, ext: string): string {
   return tempFile;
 }
 
-let activeChecks = 0;
-const checkQueue: Array<() => void> = [];
-
-function acquireCheckSlot(): Promise<void> {
-  if (activeChecks < MAX_CONCURRENT_CHECKS) {
-    activeChecks += 1;
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => checkQueue.push(resolve));
-}
-
-function releaseCheckSlot(): void {
-  const next = checkQueue.shift();
-  if (next) {
-    next();
-    return;
-  }
-  activeChecks -= 1;
-}
+/** Caps how many CL.EXE children are in flight; a queued check leaves on abort. */
+const checkSlots = new Semaphore(MAX_CONCURRENT_CHECKS);
 
 function abortError(): NodeJS.ErrnoException {
   const error: NodeJS.ErrnoException = new Error('CL.EXE check aborted');
@@ -177,14 +145,66 @@ export async function syntaxCheck(
   filePath: string,
   opts: { signal?: AbortSignal } = {},
 ): Promise<CompileResult> {
-  if (opts.signal?.aborted) throw abortError();
-  await acquireCheckSlot();
+  const release = await checkSlots.acquire(opts.signal);
+  if (release === null) throw abortError();
   try {
     if (opts.signal?.aborted) throw abortError();
     return await runCheck(config, filePath, opts.signal);
   } finally {
-    releaseCheckSlot();
+    release();
   }
+}
+
+/** Exit code reported for a child that was killed before it could report one. */
+const KILLED_EXIT_CODE = 1;
+
+/**
+ * SIGKILLs a check's child, and everything that child spawned.
+ *
+ * Wine is a launcher: it starts CL.EXE as a grandchild, so killing the child
+ * alone stops the launcher and leaves the compiler running to completion, once
+ * per superseded check. A child spawned `detached` leads its own process
+ * group, and the whole group dies together. A direct CL.EXE has no grandchild
+ * and shares the server's group, which must not be signalled by accident.
+ */
+function killCheckProcess(child: ChildProcess, useGroup: boolean): void {
+  if (useGroup && child.pid !== undefined) {
+    try {
+      process.kill(-child.pid, 'SIGKILL');
+      return;
+    } catch {
+      // The group is already empty; fall through to the leader-only kill.
+    }
+  }
+  child.kill('SIGKILL');
+}
+
+/** One child's output stream, capped at the buffer ceiling. */
+interface CapturedStream {
+  readonly chunks: Buffer[];
+  bytes: number;
+  /** True once the stream passed the ceiling and the check was cut short. */
+  overflowed: boolean;
+}
+
+function captureStream(stream: Readable, onOverflow: () => void): CapturedStream {
+  const captured: CapturedStream = { chunks: [], bytes: 0, overflowed: false };
+
+  stream.on('data', (chunk: Buffer) => {
+    captured.bytes += chunk.length;
+    if (captured.bytes > SYNTAX_CHECK_MAX_BUFFER_BYTES) {
+      // Output past the ceiling is dropped, and the check that produced it is
+      // killed rather than left to run on writing into a pipe nobody reads.
+      if (!captured.overflowed) {
+        captured.overflowed = true;
+        onOverflow();
+      }
+      return;
+    }
+    captured.chunks.push(chunk);
+  });
+
+  return captured;
 }
 
 function runCheck(
@@ -201,46 +221,65 @@ function runCheck(
       ? { ...process.env, WINEDEBUG: '-all' }
       : { ...process.env };
 
-    execFile(
-      executable,
-      execArgs,
-      // killSignal: SIGKILL because Wine ignores SIGTERM reliably.
-      // encoding: 'buffer' keeps the raw code-page bytes; they are decoded
-      // below with the configured output encoding, not assumed to be UTF-8.
-      {
-        env,
-        timeout: SYNTAX_CHECK_TIMEOUT_MS,
-        maxBuffer: SYNTAX_CHECK_MAX_BUFFER_BYTES,
-        signal,
-        killSignal: 'SIGKILL',
-        encoding: 'buffer',
-      },
-      (error, stdoutBytes, stderrBytes) => {
-        const stdout = decodeOutput(stdoutBytes, config.outputEncoding);
-        const stderr = decodeOutput(stderrBytes, config.outputEncoding);
+    const child = spawn(executable, execArgs, {
+      env,
+      // The group the kill below targets. A direct CL.EXE stays in ours.
+      detached: config.useWine,
+      // stdin is closed rather than left open: CL.EXE reads nothing from it.
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
 
-        if (error && typeof error.code === 'string') {
-          const isSpawnFailure =
-            error.code === 'ENOENT' || error.code === 'EACCES' || error.code === 'ENOTDIR';
-          if (isSpawnFailure && !stdout && !stderr) {
-            reject(new Error(`Failed to execute ${executable}: ${error.code}`));
-            return;
-          }
-          if (error.code === 'ABORT_ERR') {
-            reject(error);
-            return;
-          }
-        }
+    const kill = (): void => killCheckProcess(child, config.useWine);
+    let spawnError: NodeJS.ErrnoException | null = null;
+    let truncated = false;
 
-        const truncated =
-          error != null &&
-          typeof error.code === 'string' &&
-          error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
-        const exitCode = getExitCode(error);
-        const rawOutput = stdout + '\n' + stderr;
-        resolve({ stdout, stderr, exitCode, rawOutput, truncated });
-      },
-    );
+    // The raw code-page bytes are captured as-is and decoded below with the
+    // configured output encoding, not assumed to be UTF-8.
+    const stdout = captureStream(child.stdout, () => {
+      truncated = true;
+      kill();
+    });
+    const stderr = captureStream(child.stderr, () => {
+      truncated = true;
+      kill();
+    });
+
+    const killOnAbort = (): void => kill();
+    const timeoutTimer = setTimeout(killOnAbort, SYNTAX_CHECK_TIMEOUT_MS);
+    signal?.addEventListener('abort', killOnAbort, { once: true });
+    if (signal?.aborted) killOnAbort();
+
+    // A process that could not be started reports the reason here and still
+    // reaches 'close', which is where the result is settled.
+    child.once('error', (error: NodeJS.ErrnoException) => {
+      spawnError = error;
+    });
+
+    child.once('close', (code) => {
+      clearTimeout(timeoutTimer);
+      signal?.removeEventListener('abort', killOnAbort);
+
+      if (signal?.aborted) {
+        reject(abortError());
+        return;
+      }
+      if (spawnError !== null) {
+        reject(new Error(`Failed to execute ${executable}: ${spawnError.code ?? spawnError.message}`));
+        return;
+      }
+
+      const out = decodeOutput(Buffer.concat(stdout.chunks), config.outputEncoding);
+      const err = decodeOutput(Buffer.concat(stderr.chunks), config.outputEncoding);
+      resolve({
+        stdout: out,
+        stderr: err,
+        // A killed child reports no status of its own.
+        exitCode: code ?? KILLED_EXIT_CODE,
+        rawOutput: out + '\n' + err,
+        truncated,
+      });
+    });
   });
 }
 

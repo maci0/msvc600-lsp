@@ -51,11 +51,11 @@ dependency surface is the four `vscode-languageserver*` packages and
    origin check. This is inherent to stdio LSP, so the mitigation is
    deployment, not code: the server must be launched by the user's editor and
    not exposed as a service.
-2. **Server to `CL.EXE`.** `execFile` with an argument vector
-   (`src/compiler.ts:95`). No shell, so no metacharacter injection. The
-   argument vector is assembled from config in `src/compiler.ts:24-47`.
+2. **Server to `CL.EXE`.** `spawn` with an argument vector
+   (`src/compiler.ts:58`). No shell, so no metacharacter injection. The
+   argument vector is assembled from config in `src/compiler.ts:58-81`.
 3. **Server to Wine.** On non-Windows the config-supplied `wineExecutable` is
-   the program that is actually exec'd (`src/compiler.ts:88-89`).
+   the program that is actually exec'd (`src/compiler.ts:216-217`).
 4. **Server to temp filesystem.** Full document text at `os.tmpdir()`
    (`src/server.ts:224-227`), and, for the entry points that stage content
    themselves, through the `TempFileStore` boundary (`src/tempfile.ts:45`).
@@ -125,10 +125,13 @@ dependency surface is the four `vscode-languageserver*` packages and
 
 Implemented:
 
-- Argument vectors instead of a shell, so config values cannot smuggle in
-  shell syntax: `src/compiler.ts:95`.
-- `execFile` with `timeout: 30000`, `maxBuffer: 1 MiB`, an `AbortSignal` and
-  `SIGKILL`: `src/compiler.ts:106`.
+- `spawn` without a shell, so config values cannot smuggle in shell syntax:
+  `src/compiler.ts:58`.
+- A check is bounded by a 30 s deadline and a 1 MiB output cap, both enforced by
+  the server: `src/compiler.ts:210`.
+- Under Wine the child is detached into its own process group and the deadline,
+  the abort, and the output cap all SIGKILL that group, so the `CL.EXE` grandchild
+  does not outlive the launcher that started it: `src/compiler.ts:210`.
 - Runtime configuration is restricted to `includePaths` and `warnLevel`;
   `additionalFlags` is rejected there: `src/server.ts:75-79`.
 - Type and range validation of every config field: `src/config.ts:74-120`.
@@ -137,12 +140,13 @@ Implemented:
   (`src/task-queue.ts`).
 - Validation generations never repeat, so a result from before a close cannot
   overwrite a newer one: `src/validation-state.ts`, `src/server.ts:199`, `src/server.ts:235`.
-- Concurrent `CL.EXE` children are capped at `MAX_CONCURRENT_CHECKS`:
-  `src/server.ts:52`, `src/task-queue.ts`.
+- Concurrent `CL.EXE` children are capped at `MAX_CONCURRENT_CHECKS`, and a
+  check aborted while queued leaves the queue instead of waiting for a slot:
+  `src/compiler.ts:29`, `src/compiler.ts:124`.
 - `shutdown` clears the debounce timers, aborts every in-flight child, and
   waits briefly for them to unlink their temp files: `src/server.ts:156-168`.
 - Temp files are unlinked in a `finally` block: `src/server.ts:243-248`, and
-  leftovers from a killed run are removed at startup: `src/compiler.ts:168-194`.
+  leftovers from a killed run are removed at startup: `src/compiler.ts:304`.
 - Content staged through the `TempFileStore` boundary is written with the same
   `0o600` mode and random name: `src/tempfile.ts:45-59`.
 - Document extension is checked against an allowlist before any work is done:
