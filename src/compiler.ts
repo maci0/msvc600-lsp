@@ -7,8 +7,7 @@ import { toWinePath } from './wine-path';
 import { Semaphore } from './concurrency';
 import { createSystemTempFileStore, TempFileStore } from './tempfile';
 
-/** Options for the entry points that stage document text on disk. */
-export interface TempFileOptions {
+/** Options for the entry points that stage document text on disk. */export interface TempFileOptions {
   /** Filesystem boundary to write through. Defaults to the real temp directory. */
   store?: TempFileStore;
 }
@@ -76,32 +75,6 @@ export function buildArgs(config: Msvc6Config, filePath: string): string[] {
   return args;
 }
 
-/**
- * Extracts the child process exit code from an `execFile` callback error.
- *
- * Node.js `ExecException` always sets `error.code` to a *string* (e.g.
- * `'ENOENT'`, `'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'`). The numeric exit
- * code — when the child ran but returned non-zero — is exposed on the
- * non-standard `status` property set by `child_process` internals.
- * We check `status` first to avoid silently flattening every CL.EXE
- * failure to exit code 1.
- */
-function getExitCode(error: Error | null): number {
-  if (!error) return 0;
-  const asExec = error as NodeJS.ErrnoException & { status?: number };
-  if (typeof asExec.status === 'number') return asExec.status;
-  return 1;
-}
-
-/**
- * Whether the child was killed by the exec timeout rather than by the caller.
- * A timeout kill carries no string `code` (it is `null`) and no `status`, so
- * only `killed` distinguishes it from an ordinary non-zero exit.
- */
-function isTimeoutKill(error: Error | null): boolean {
-  return error != null && (error as { killed?: boolean }).killed === true;
-}
-
 const checkSlots = new Semaphore(MAX_CONCURRENT_CHECKS);
 
 function abortError(): NodeJS.ErrnoException {
@@ -138,6 +111,32 @@ export async function syntaxCheck(
   } finally {
     release();
   }
+}
+
+/**
+ * Extracts the child process exit code from an `execFile` callback error.
+ *
+ * Node.js `ExecException` always sets `error.code` to a *string* (e.g.
+ * `'ENOENT'`, `'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'`). The numeric exit
+ * code — when the child ran but returned non-zero — is exposed on the
+ * non-standard `status` property set by `child_process` internals.
+ * We check `status` first to avoid silently flattening every CL.EXE
+ * failure to exit code 1.
+ */
+function getExitCode(error: Error | null): number {
+  if (!error) return 0;
+  const asExec = error as NodeJS.ErrnoException & { status?: number };
+  if (typeof asExec.status === 'number') return asExec.status;
+  return 1;
+}
+
+/**
+ * Whether the child was killed by the exec timeout rather than by the caller.
+ * A timeout kill carries no string `code` (it is `null`) and no `status`, so
+ * only `killed` distinguishes it from an ordinary non-zero exit.
+ */
+function isTimeoutKill(error: Error | null): boolean {
+  return error != null && (error as { killed?: boolean }).killed === true;
 }
 
 function runCheck(

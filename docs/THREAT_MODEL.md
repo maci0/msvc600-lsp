@@ -115,7 +115,7 @@ dependency surface is the four `vscode-languageserver*` packages and
   controls the headers the preprocessor sees for every open file.
 - *Denial of service.* `didChangeConfiguration` queues a check for every open
   document (`src/server.ts:161-162`); the queue runs at most
-  `MAX_CONCURRENT_CHECKS` of them at a time (`src/server.ts:68`), so a client
+  `MAX_CONCURRENT_CHECKS` of them at a time (`src/server.ts:81`), so a client
   that resends the notification cannot fan out one child per open file.
   Document text is still unbounded, and the LSP layer accepts an unbounded
   number of open documents.
@@ -182,13 +182,13 @@ Implemented:
   than at decode: `src/config.ts:140-146`.
 - `MSVC600_*` environment variables go through the same validation and the
   same issue reporting as the two protocol sources: `src/config.ts:289-330`.
-- Debounce and a per-URI abort discard stale work: `src/server.ts:164-177`,
+- Debounce and a per-URI abort discard stale work: `src/server.ts:251-265`,
   and `TaskQueue.submit` supersedes the entry already held for its key
   (`src/task-queue.ts`).
 - Validation generations never repeat, so a result from before a close cannot
   overwrite a newer one: `src/validation-state.ts`, `src/server.ts:247`, `src/server.ts:290`.
 - Concurrent `CL.EXE` children are capped at `MAX_CONCURRENT_CHECKS`:
-  `src/server.ts:68`, `src/task-queue.ts`.
+  `src/server.ts:81`, `src/task-queue.ts`.
 - `shutdown` clears the debounce timers, aborts every in-flight child, and
   waits briefly for them to unlink their temp files: `src/server.ts:204-217`.
 - Temp files are unlinked in a `finally` block: `src/server.ts:364-370`, and
@@ -223,7 +223,7 @@ reaches the compiler at all.
   `didChangeConfiguration` repeatedly with a wide `includePaths` list. Each
   message revalidates every open document (`src/server.ts:161`); the queue
   keeps the resulting spawn to at most `MAX_CONCURRENT_CHECKS` at a time
-  (`src/server.ts:68`), so the cost is latency rather than process exhaustion.
+  (`src/server.ts:81`), so the cost is latency rather than process exhaustion.
 - A document with a hostile `#include` name reaches `CL.EXE`; the resulting
   error text is republished verbatim as a diagnostic message
   (`src/diagnostics.ts:105-108`), which is the only way untrusted text is

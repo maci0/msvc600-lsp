@@ -33,11 +33,12 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ENV_NAMES = exports.ENV_PREFIX = exports.DEFAULT_MAX_OUTPUT_BYTES = exports.DEFAULT_CHECK_TIMEOUT_MS = exports.DEFAULT_OUTPUT_ENCODING = exports.ALL_EXTENSIONS = exports.CPP_EXTENSIONS = exports.C_EXTENSIONS = void 0;
+exports.ENV_NAMES = exports.ENV_PREFIX = exports.RUNTIME_KEYS = exports.DEFAULT_MAX_OUTPUT_BYTES = exports.DEFAULT_CHECK_TIMEOUT_MS = exports.DEFAULT_WINE_EXECUTABLE = exports.DEFAULT_WARN_LEVEL = exports.DEFAULT_OUTPUT_ENCODING = exports.ALL_EXTENSIONS = exports.CPP_EXTENSIONS = exports.C_EXTENSIONS = void 0;
 exports.defaultIncludePaths = defaultIncludePaths;
 exports.defaultConfig = defaultConfig;
 exports.validateConfig = validateConfig;
 exports.mergeValidated = mergeValidated;
+exports.runtimeConfigUpdate = runtimeConfigUpdate;
 exports.runtimeConfigEquals = runtimeConfigEquals;
 exports.configFromEnv = configFromEnv;
 exports.formatIssues = formatIssues;
@@ -54,6 +55,10 @@ exports.CPP_EXTENSIONS = ['.cpp', '.cxx', '.cc', '.hpp', '.hxx'];
 exports.ALL_EXTENSIONS = [...exports.C_EXTENSIONS, ...exports.CPP_EXTENSIONS, '.h'];
 /** CL.EXE diagnostics are ASCII-safe under Wine's UTF-8 console by default. */
 exports.DEFAULT_OUTPUT_ENCODING = 'utf8';
+/** Most verbose warning level; MSVC6 has no higher one to ask for. */
+exports.DEFAULT_WARN_LEVEL = 4;
+/** Wine is installed under this name unless the user points at another build. */
+exports.DEFAULT_WINE_EXECUTABLE = 'wine';
 /** A check that takes longer than this is killed; a hung Wine is worse than no check. */
 exports.DEFAULT_CHECK_TIMEOUT_MS = 30_000;
 /** Cap on captured CL.EXE output. Past it the tail of the diagnostic list is lost. */
@@ -74,11 +79,10 @@ function defaultConfig() {
         msvcBasePath,
         clPath: path.join(msvcBasePath, 'BIN', 'CL.EXE'),
         includePaths: defaultIncludePaths(msvcBasePath, useWine),
-        warnLevel: 4,
+        warnLevel: exports.DEFAULT_WARN_LEVEL,
         additionalFlags: [],
-        wineExecutable: 'wine',
-        // CL.EXE diagnostics are ASCII-safe under Wine's UTF-8 console by default.
-        outputEncoding: 'utf8',
+        wineExecutable: exports.DEFAULT_WINE_EXECUTABLE,
+        outputEncoding: exports.DEFAULT_OUTPUT_ENCODING,
         useWine,
         checkTimeoutMs: exports.DEFAULT_CHECK_TIMEOUT_MS,
         maxOutputBytes: exports.DEFAULT_MAX_OUTPUT_BYTES,
@@ -205,6 +209,30 @@ function describe(value) {
  */
 function mergeValidated(base, source) {
     return { ...base, ...source.values };
+}
+/**
+ * Fields a `workspace/didChangeConfiguration` notification is allowed to
+ * replace. The rest are fixed at initialization, so a notification carrying
+ * them has to say so rather than leave the previous value in place silently.
+ */
+exports.RUNTIME_KEYS = ['includePaths', 'warnLevel'];
+/**
+ * Selects the runtime-settable fields out of a validated notification. A field
+ * outside {@link RUNTIME_KEYS} is returned in `ignored` when it validated, so
+ * the caller can report a value the client believes it applied.
+ */
+function runtimeConfigUpdate(validated) {
+    const values = {};
+    const ignored = [];
+    for (const [key, value] of Object.entries(validated.values)) {
+        if (exports.RUNTIME_KEYS.includes(key)) {
+            values[key] = value;
+        }
+        else {
+            ignored.push(key);
+        }
+    }
+    return { values, ignored };
 }
 /**
  * Compares the fields a runtime configuration change is allowed to replace

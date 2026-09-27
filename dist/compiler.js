@@ -82,32 +82,6 @@ function buildArgs(config, filePath) {
     args.push(config.useWine ? (0, wine_path_1.toWinePath)(filePath) : filePath);
     return args;
 }
-/**
- * Extracts the child process exit code from an `execFile` callback error.
- *
- * Node.js `ExecException` always sets `error.code` to a *string* (e.g.
- * `'ENOENT'`, `'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'`). The numeric exit
- * code — when the child ran but returned non-zero — is exposed on the
- * non-standard `status` property set by `child_process` internals.
- * We check `status` first to avoid silently flattening every CL.EXE
- * failure to exit code 1.
- */
-function getExitCode(error) {
-    if (!error)
-        return 0;
-    const asExec = error;
-    if (typeof asExec.status === 'number')
-        return asExec.status;
-    return 1;
-}
-/**
- * Whether the child was killed by the exec timeout rather than by the caller.
- * A timeout kill carries no string `code` (it is `null`) and no `status`, so
- * only `killed` distinguishes it from an ordinary non-zero exit.
- */
-function isTimeoutKill(error) {
-    return error != null && error.killed === true;
-}
 const checkSlots = new concurrency_1.Semaphore(exports.MAX_CONCURRENT_CHECKS);
 function abortError() {
     const error = new Error('CL.EXE check aborted');
@@ -141,6 +115,32 @@ async function syntaxCheck(config, filePath, opts = {}) {
     finally {
         release();
     }
+}
+/**
+ * Extracts the child process exit code from an `execFile` callback error.
+ *
+ * Node.js `ExecException` always sets `error.code` to a *string* (e.g.
+ * `'ENOENT'`, `'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'`). The numeric exit
+ * code — when the child ran but returned non-zero — is exposed on the
+ * non-standard `status` property set by `child_process` internals.
+ * We check `status` first to avoid silently flattening every CL.EXE
+ * failure to exit code 1.
+ */
+function getExitCode(error) {
+    if (!error)
+        return 0;
+    const asExec = error;
+    if (typeof asExec.status === 'number')
+        return asExec.status;
+    return 1;
+}
+/**
+ * Whether the child was killed by the exec timeout rather than by the caller.
+ * A timeout kill carries no string `code` (it is `null`) and no `status`, so
+ * only `killed` distinguishes it from an ordinary non-zero exit.
+ */
+function isTimeoutKill(error) {
+    return error != null && error.killed === true;
 }
 function runCheck(config, filePath, opts) {
     return new Promise((resolve, reject) => {

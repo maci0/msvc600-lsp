@@ -67,6 +67,12 @@ export interface ConfigValidation {
 /** CL.EXE diagnostics are ASCII-safe under Wine's UTF-8 console by default. */
 export const DEFAULT_OUTPUT_ENCODING = 'utf8';
 
+/** Most verbose warning level; MSVC6 has no higher one to ask for. */
+export const DEFAULT_WARN_LEVEL: WarnLevel = 4;
+
+/** Wine is installed under this name unless the user points at another build. */
+export const DEFAULT_WINE_EXECUTABLE = 'wine';
+
 /** A check that takes longer than this is killed; a hung Wine is worse than no check. */
 export const DEFAULT_CHECK_TIMEOUT_MS = 30_000;
 
@@ -91,9 +97,9 @@ export function defaultConfig(): Msvc6Config {
     msvcBasePath,
     clPath: path.join(msvcBasePath, 'BIN', 'CL.EXE'),
     includePaths: defaultIncludePaths(msvcBasePath, useWine),
-    warnLevel: 4,
+    warnLevel: DEFAULT_WARN_LEVEL,
     additionalFlags: [],
-    wineExecutable: 'wine',
+    wineExecutable: DEFAULT_WINE_EXECUTABLE,
     outputEncoding: DEFAULT_OUTPUT_ENCODING,
     useWine,
     checkTimeoutMs: DEFAULT_CHECK_TIMEOUT_MS,
@@ -223,6 +229,40 @@ function describe(value: unknown): string {
  */
 export function mergeValidated(base: Msvc6Config, source: ConfigValidation): Msvc6Config {
   return { ...base, ...source.values };
+}
+
+/**
+ * Fields a `workspace/didChangeConfiguration` notification is allowed to
+ * replace. The rest are fixed at initialization, so a notification carrying
+ * them has to say so rather than leave the previous value in place silently.
+ */
+export const RUNTIME_KEYS: readonly (keyof Msvc6Config)[] = ['includePaths', 'warnLevel'];
+
+/** What a runtime configuration notification changes, and what it only appeared to change. */
+export interface RuntimeConfigUpdate {
+  values: Partial<Msvc6Config>;
+  /** Fields the notification set that pass at startup but not at runtime. */
+  ignored: string[];
+}
+
+/**
+ * Selects the runtime-settable fields out of a validated notification. A field
+ * outside {@link RUNTIME_KEYS} is returned in `ignored` when it validated, so
+ * the caller can report a value the client believes it applied.
+ */
+export function runtimeConfigUpdate(validated: ConfigValidation): RuntimeConfigUpdate {
+  const values: Partial<Msvc6Config> = {};
+  const ignored: string[] = [];
+
+  for (const [key, value] of Object.entries(validated.values)) {
+    if (RUNTIME_KEYS.includes(key as keyof Msvc6Config)) {
+      (values as Record<string, unknown>)[key] = value;
+    } else {
+      ignored.push(key);
+    }
+  }
+
+  return { values, ignored };
 }
 
 /**

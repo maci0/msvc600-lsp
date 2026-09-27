@@ -58,6 +58,10 @@ export interface ConfigValidation {
 }
 /** CL.EXE diagnostics are ASCII-safe under Wine's UTF-8 console by default. */
 export declare const DEFAULT_OUTPUT_ENCODING = "utf8";
+/** Most verbose warning level; MSVC6 has no higher one to ask for. */
+export declare const DEFAULT_WARN_LEVEL: WarnLevel;
+/** Wine is installed under this name unless the user points at another build. */
+export declare const DEFAULT_WINE_EXECUTABLE = "wine";
 /** A check that takes longer than this is killed; a hung Wine is worse than no check. */
 export declare const DEFAULT_CHECK_TIMEOUT_MS = 30000;
 /** Cap on captured CL.EXE output. Past it the tail of the diagnostic list is lost. */
@@ -86,6 +90,24 @@ export declare function validateConfig(raw: unknown): ConfigValidation;
  * precedence order.
  */
 export declare function mergeValidated(base: Msvc6Config, source: ConfigValidation): Msvc6Config;
+/**
+ * Fields a `workspace/didChangeConfiguration` notification is allowed to
+ * replace. The rest are fixed at initialization, so a notification carrying
+ * them has to say so rather than leave the previous value in place silently.
+ */
+export declare const RUNTIME_KEYS: readonly (keyof Msvc6Config)[];
+/** What a runtime configuration notification changes, and what it only appeared to change. */
+export interface RuntimeConfigUpdate {
+    values: Partial<Msvc6Config>;
+    /** Fields the notification set that pass at startup but not at runtime. */
+    ignored: string[];
+}
+/**
+ * Selects the runtime-settable fields out of a validated notification. A field
+ * outside {@link RUNTIME_KEYS} is returned in `ignored` when it validated, so
+ * the caller can report a value the client believes it applied.
+ */
+export declare function runtimeConfigUpdate(validated: ConfigValidation): RuntimeConfigUpdate;
 /**
  * Compares the fields a runtime configuration change is allowed to replace
  * (`includePaths`, `warnLevel`). A repeated notification carrying the same

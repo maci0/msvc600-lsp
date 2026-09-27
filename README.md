@@ -83,7 +83,8 @@ Runtime Configuration.
 A value that fails validation is dropped and reported on the server's log channel
 (`window/logMessage` in VS Code, the LSP client's log) naming the field and the reason, so a
 misspelled key or a value of the wrong type is visible instead of leaving a default in place
-unexplained. The effective configuration is logged once on `initialize`. Nothing in this
+unexplained. The effective configuration is logged once on `initialize`, together with a warning
+when `clPath` or a path-form `wineExecutable` does not exist on this machine. Nothing in this
 configuration is secret, so the log is not redacted.
 
 ### Initialization Options
@@ -146,7 +147,7 @@ Only `includePaths` and `warnLevel` can be changed at runtime via `workspace/did
 }
 ```
 
-Other fields (especially `additionalFlags`) cannot be changed at runtime, so a runtime notification cannot inject CL.EXE flags. They are still set freely at startup, where the client also picks `clPath` and `wineExecutable`, so anything able to speak the server's stdio channel can choose the binary that runs and the flags it receives. See `docs/THREAT_MODEL.md`. Rejected fields are dropped and logged, so a bad value leaves the previous one in place with a reason attached. Changing the config re-validates every open document.
+Other fields (especially `additionalFlags`) cannot be changed at runtime, so a runtime notification cannot inject CL.EXE flags. They are still set freely at startup, where the client also picks `clPath` and `wineExecutable`, so anything able to speak the server's stdio channel can choose the binary that runs and the flags it receives. See `docs/THREAT_MODEL.md`. Rejected fields are dropped and logged, and a field that validated but cannot change at runtime is named in the same log, so a bad or misplaced value never leaves the previous one in place without a reason. Changing the config re-validates every open document.
 
 ## Architecture
 

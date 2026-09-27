@@ -22,6 +22,7 @@ import {
   mergeValidated,
   validateConfig,
   runtimeConfigEquals,
+  runtimeConfigUpdate,
   ALL_EXTENSIONS,
   CPP_EXTENSIONS,
 } from './config';
@@ -89,6 +90,35 @@ function logValidationError(context: string, e: unknown): void {
 }
 
 /**
+ * Reports an executable the effective configuration points at that is not on
+ * this machine. A wrong `msvcBasePath` or `clPath` is otherwise invisible
+ * until every open file fails its check with the same spawn error.
+ *
+ * A Wine executable given as a bare command name is left to `PATH`, so it is
+ * not checked here.
+ */
+function warnAboutMissingExecutables(config: Msvc6Config): string[] {
+  const warnings: string[] = [];
+
+  if (!fs.existsSync(config.clPath)) {
+    warnings.push(
+      `msvc600-lsp: clPath ${config.clPath} does not exist; every check will fail to spawn CL.EXE ` +
+        '(set msvcBasePath or clPath in initializationOptions or MSVC600_*)',
+    );
+  }
+
+  if (config.useWine && path.basename(config.wineExecutable) !== config.wineExecutable) {
+    if (!fs.existsSync(config.wineExecutable)) {
+      warnings.push(
+        `msvc600-lsp: wineExecutable ${config.wineExecutable} does not exist; every check will fail to spawn it`,
+      );
+    }
+  }
+
+  return warnings;
+}
+
+/**
  * Whether `e` came from the compiler run rather than from staging the scratch
  * source. A rejection raised by `syntaxCheck` carries no errno, while the
  * filesystem failures that abort the write do.
@@ -146,6 +176,10 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
       `maxOutputBytes=${config.maxOutputBytes}`,
   );
 
+  for (const line of warnAboutMissingExecutables(config)) {
+    connection.console.warn(sanitizeForLog(line));
+  }
+
   return {
     capabilities: {
       textDocumentSync: {
@@ -181,12 +215,18 @@ connection.onDidChangeConfiguration((change) => {
   // Runtime config changes are untrusted — only accept non-executable fields.
   // Notably, additionalFlags is excluded: arbitrary CL.EXE flags could write files
   // or alter behavior beyond syntax checking. Set additionalFlags via initializationOptions only.
+  const update = runtimeConfigUpdate(validated);
+  if (update.ignored.length > 0) {
+    connection.console.warn(
+      sanitizeForLog(
+        `msvc600-lsp: didChangeConfiguration ignored ${update.ignored.join(', ')}: ` +
+          'only includePaths and warnLevel can change while the server runs (set the rest via initializationOptions)',
+      ),
+    );
+  }
+
   const previous = config;
-  config = {
-    ...config,
-    ...(validated.values.includePaths ? { includePaths: validated.values.includePaths } : {}),
-    ...(validated.values.warnLevel !== undefined ? { warnLevel: validated.values.warnLevel } : {}),
-  };
+  config = { ...config, ...update.values };
 
   // A client may re-send the settings it already holds. Re-checking every open
   // document would spawn one CL.EXE per document for no change in the inputs.

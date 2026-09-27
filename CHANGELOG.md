@@ -21,6 +21,22 @@ package version, not a published artifact.
   that `encoding.ts` already owns, so a change to BOM handling reached only one of the two.
 - The tree compiles again. `compiler.ts` imported the `Semaphore` from a `concurrency.ts` that
   a cleanup had deleted, so `bun run typecheck` failed before anything could be built or run.
+- The effective configuration is reported from the values in force. The
+  timeout and truncation messages named the built-in 30 s and 1 MiB defaults
+  even when `checkTimeoutMs` or `maxOutputBytes` had been set to something
+  else, and those two defaults were declared a second time in the compiler
+  module.
+- A `workspace/didChangeConfiguration` payload that sets a field other than
+  `includePaths` or `warnLevel` now names the ignored fields on the log
+  channel, instead of validating them and dropping them without a word.
+- A `clPath` or `wineExecutable` that does not exist is reported once at
+  `initialize`, instead of surfacing as the same spawn failure on every open
+  file.
+- `src/concurrency.ts`, which the compiler and its tests import, was missing
+  from the tree, so the build and the test suite could not run.
+- The `noisy_compiler.mjs` fixture passed a string to `writeSync` with no file
+  descriptor, which current Node rejects, so the output-cap test never saw a
+  child that overran `maxOutputBytes`.
 - `checkTimeoutMs` and `maxOutputBytes` now reach the CL.EXE invocation. Both options were
   accepted, validated, logged as part of the effective configuration, and then ignored: every
   check ran under the built-in 30 s timeout and 1 MiB output cap, so raising the timeout left a

@@ -10,6 +10,7 @@ import {
   CPP_EXTENSIONS,
   ALL_EXTENSIONS,
   runtimeConfigEquals,
+  runtimeConfigUpdate,
 } from '../src/config';
 import type { WarnLevel, Msvc6Config } from '../src/config';
 
@@ -304,6 +305,28 @@ describe('runtimeConfigEquals', () => {
     expect(
       runtimeConfigEquals({ ...base, includePaths: two }, { ...base, includePaths: ['C:\\b', 'C:\\a'] }),
     ).toBe(false);
+  });
+});
+
+describe('runtimeConfigUpdate', () => {
+  it('keeps the two fields a notification may change', () => {
+    const update = runtimeConfigUpdate(validateConfig({ warnLevel: 2, includePaths: ['C:\\a'] }));
+    expect(update.values).toEqual({ warnLevel: 2, includePaths: ['C:\\a'] });
+    expect(update.ignored).toEqual([]);
+  });
+
+  it('names a field that validated but cannot change at runtime', () => {
+    const update = runtimeConfigUpdate(
+      validateConfig({ warnLevel: 2, additionalFlags: ['/DDEBUG'], clPath: '/opt/CL.EXE' }),
+    );
+    expect(update.values).toEqual({ warnLevel: 2 });
+    expect(update.ignored).toEqual(['clPath', 'additionalFlags']);
+  });
+
+  it('reports nothing for a field the validation already rejected', () => {
+    const update = runtimeConfigUpdate(validateConfig({ additionalFlags: 'not a list' }));
+    expect(update.values).toEqual({});
+    expect(update.ignored).toEqual([]);
   });
 });
 
