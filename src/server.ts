@@ -11,7 +11,6 @@ import {
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { URI } from 'vscode-uri';
-import * as fs from 'fs';
 import * as path from 'path';
 import {
   Msvc6Config,
@@ -27,13 +26,15 @@ import {
 import {
   syntaxCheck,
   stripByteOrderMark,
-  createTempSourcePath,
+  extForLanguageId,
   sweepStaleTempFiles,
   DocumentTooLargeError,
   MAX_SOURCE_BYTES,
 } from './compiler';
 import { parseDiagnostics, toLspDiagnostics, toFailureDiagnostic, LSP_UINT_MAX } from './diagnostics';
 import { sanitizeForLog } from './logging';
+import { createDebouncer, realScheduler } from './scheduler';
+import { createSystemTempFileStore, TempFileStore } from './tempfile';
 import { ValidationSequencer, ValidationHandle } from './validation-state';
 import { TaskQueue } from './task-queue';
 
@@ -54,10 +55,13 @@ let hasConfigurationCapability = false;
 /** Decides which validation result per URI is allowed to reach the client. */
 const validationSequencer = new ValidationSequencer();
 
-/** Per-URI debounce timers for `onDidChangeContent`. */
-const pendingValidations = new Map<string, NodeJS.Timeout>();
-
 const DEBOUNCE_MS = 300;
+
+/** Where document text is staged on disk for CL.EXE. */
+const tempFileStore: TempFileStore = createSystemTempFileStore();
+
+/** Per-URI debounce timers for `onDidChangeContent`. */
+const debouncer = createDebouncer(realScheduler, DEBOUNCE_MS);
 
 /**
  * At most this many CL.EXE children exist at once. Each check is a heavyweight
@@ -154,8 +158,7 @@ connection.onDidChangeConfiguration((change) => {
     ),
   );
 
-  for (const t of pendingValidations.values()) clearTimeout(t);
-  pendingValidations.clear();
+  debouncer.cancelAll();
 
   // The queue bounds how many of these become CL.EXE children at once.
   for (const d of documents.all()) scheduleValidation(d);
@@ -163,36 +166,21 @@ connection.onDidChangeConfiguration((change) => {
 
 documents.onDidChangeContent((change) => {
   const uri = change.document.uri;
-  const existing = pendingValidations.get(uri);
-  if (existing) clearTimeout(existing);
-  pendingValidations.set(
-    uri,
-    setTimeout(() => {
-      pendingValidations.delete(uri);
-      const doc = documents.get(uri);
-      if (!doc) return;
-      scheduleValidation(doc);
-    }, DEBOUNCE_MS),
-  );
+  debouncer.schedule(uri, () => {
+    const doc = documents.get(uri);
+    if (!doc) return;
+    scheduleValidation(doc);
+  });
 });
 
 documents.onDidSave((change) => {
-  const uri = change.document.uri;
-  const pending = pendingValidations.get(uri);
-  if (pending) {
-    clearTimeout(pending);
-    pendingValidations.delete(uri);
-  }
+  debouncer.cancel(change.document.uri);
   scheduleValidation(change.document);
 });
 
 documents.onDidClose((event) => {
   const uri = event.document.uri;
-  const pending = pendingValidations.get(uri);
-  if (pending) {
-    clearTimeout(pending);
-    pendingValidations.delete(uri);
-  }
+  debouncer.cancel(uri);
   validationQueue.cancel(uri);
   validationSequencer.close(uri);
   connection.sendDiagnostics({ uri, diagnostics: [] });
@@ -206,8 +194,7 @@ connection.onShutdown(async () => {
   // session, and any CL.EXE child still running would be orphaned onto the
   // machine when the process exits. Draining lets the aborted checks unlink
   // their temp files, which hold the document text.
-  for (const t of pendingValidations.values()) clearTimeout(t);
-  pendingValidations.clear();
+  debouncer.cancelAll();
   validationQueue.close();
   await Promise.race([
     validationQueue.drained(),
@@ -256,21 +243,26 @@ function scheduleValidation(textDocument: TextDocument): void {
     : textDocument.languageId === 'cpp'
       ? 'cpp'
       : 'c';
-  const tempFile = createTempSourcePath(langId);
-  // Content and temp path are snapshotted at submission so a queued check
-  // never re-reads a document that has since changed.
+  // Content is snapshotted at submission so a queued check never re-reads a
+  // document that has since changed.
   const content = textDocument.getText();
+  const sourceExt = extForLanguageId(langId);
 
-  validationQueue.submit(uri, (signal) => runValidation(uri, handle, content, tempFile, signal));
+  validationQueue.submit(uri, (signal) =>
+    runValidation(uri, handle, content, sourceExt, signal),
+  );
 }
 
 async function runValidation(
   uri: string,
   handle: ValidationHandle,
   content: string,
-  tempFile: string,
+  sourceExt: string,
   signal: AbortSignal,
 ): Promise<void> {
+  // Set as soon as the scratch file exists, so the cleanup below runs on every
+  // path that got that far.
+  let tempFile: string | undefined;
   try {
     // A newer edit aborted this one while it sat in the queue.
     if (signal.aborted) return;
@@ -281,14 +273,7 @@ async function runValidation(
       throw new DocumentTooLargeError(byteLength);
     }
 
-    // The create is exclusive (`wx`): a path already taken in the shared temp
-    // directory is an error rather than something to truncate, so a file or
-    // symlink planted by another local user is never written through.
-    fs.writeFileSync(tempFile, body, {
-      encoding: 'utf-8',
-      mode: 0o600,
-      flag: 'wx',
-    });
+    tempFile = tempFileStore.write(body, sourceExt);
 
     const result = await syntaxCheck(config, tempFile, { signal });
 
@@ -312,11 +297,7 @@ async function runValidation(
     }
     connection.console.error(`Validation error (${uri}): ${String(e)}`);
   } finally {
-    try {
-      fs.unlinkSync(tempFile);
-    } catch {
-      // Temp file may already be gone or was never created.
-    }
+    if (tempFile !== undefined) tempFileStore.remove(tempFile);
   }
 }
 
@@ -344,10 +325,3 @@ try {
 } catch (e) {
   connection.console.error(`Stale temp sweep failed: ${String(e)}`);
 }
-
-/** Returns the current live config — typed `Readonly` to prevent accidental mutation. */
-function getConfig(): Readonly<Msvc6Config> {
-  return config;
-}
-
-export { connection, documents, getConfig, scheduleValidation };

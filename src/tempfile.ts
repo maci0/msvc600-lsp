@@ -51,7 +51,15 @@ export function createSystemTempFileStore(
   return {
     write(content: string, extension: string): string {
       const file = path.join(dir, `${TEMP_PREFIX}${generateName()}${extension}`);
-      fs.writeFileSync(file, content, { encoding: 'utf-8', mode: TEMP_FILE_MODE });
+      // `wx` makes the create exclusive: a path already taken in a shared temp
+      // directory is an error rather than something to write through, so a file
+      // or symlink another local user planted is never overwritten. `mode`
+      // applies only to a file this call creates, which is why the flag matters.
+      fs.writeFileSync(file, content, {
+        encoding: 'utf-8',
+        mode: TEMP_FILE_MODE,
+        flag: 'wx',
+      });
       return file;
     },
     remove(file: string): void {

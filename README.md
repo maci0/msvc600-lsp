@@ -21,7 +21,9 @@ Debouncing (300 ms) and abort-on-stale ensure only the latest edit triggers a ch
 - **Wine** (Linux/macOS) or native Windows
 - **MSVC 6.0 installation**: `VC/VC98/{BIN,INCLUDE,LIB}` must be present at the package root, since that path is the default `msvcBasePath`. On Linux, `bun run setup` mirrors the tree into `~/.wine/drive_c/msvc6` with a lowercased copy of every file, because MSVC headers use mixed-case `#include` lines that do not resolve on a case-sensitive filesystem. The script is Linux-only (it writes to `~/.wine/drive_c`), so on macOS point `includePaths` at `VC/VC98/INCLUDE` instead.
 
-The test suite is an integration suite: it spawns the real `CL.EXE` through Wine, so Wine and an MSVC 6.0 install are required to run `bun run test`.
+Most of the test suite needs neither Wine nor an MSVC 6.0 install. The blocks that spawn the
+real `CL.EXE` skip themselves when either is missing, so `bun run test` passes either way and
+reports those blocks as skipped.
 
 ## Installation
 
@@ -122,18 +124,22 @@ Other fields (especially `additionalFlags`) cannot be changed at runtime, so a r
 
 ```
 src/
-├── config.ts       # Configuration types and validation
-├── wine-path.ts    # POSIX ↔ Wine path conversion
-├── compiler.ts     # CL.EXE invocation (syntax-check mode)
-├── diagnostics.ts  # MSVC output parser → LSP Diagnostic conversion
-├── scheduler.ts    # Debounce timer boundary (real timer, or a stepped one in simulation)
-├── tempfile.ts     # Temp-file boundary: real filesystem, or an in-memory simulated store
-└── server.ts       # LSP server lifecycle, debouncing, abort handling
+├── config.ts           # Configuration types and validation
+├── wine-path.ts        # POSIX ↔ Wine path conversion
+├── compiler.ts         # CL.EXE invocation (syntax-check mode)
+├── diagnostics.ts      # MSVC output parser → LSP Diagnostic conversion
+├── logging.ts          # Strips control and bidi characters from log text
+├── scheduler.ts        # Debounce timer boundary (real timer, or a stepped one in simulation)
+├── tempfile.ts         # Temp-file boundary: real filesystem, or an in-memory simulated store
+├── task-queue.ts       # Bounded per-URI validation queue, aborting superseded tasks
+├── validation-state.ts # Per-URI generation numbers deciding which result may publish
+├── concurrency.ts      # Counting semaphore
+└── server.ts           # LSP server lifecycle, debouncing, abort handling
 ```
 
 **Key design decisions:**
 
-- **Temp files + abort controllers**: Each validation writes to a unique temp file and tracks an `AbortController`. New edits abort stale in-flight checks, and a startup sweep removes scratch files left behind by a crashed run. The file is created exclusively with mode `0600`, so a file or symlink another local user planted at that path is never written through.
+- **Temp files + abort controllers**: Each validation writes to a unique temp file and tracks an `AbortController`. New edits abort stale in-flight checks, and a startup sweep removes scratch files left behind by a crashed run. The file is created exclusively (`wx`) with mode `0600`, so a file or symlink another local user planted at that path is never written through.
 - **Nondeterministic edges are injected**: Disk writes go through `TempFileStore` and the debounce goes through `Scheduler`, so a run can be replayed from a recorded call sequence with reproducible file names. Production keeps `crypto.randomUUID` names and `0o600` files; a simulation supplies its own store and scheduler.
 - **Validation generations**: A process-wide counter hands each validation a number that is never reused. A result is published only while its number is still the newest one for its URI, so a check that finishes late, or one belonging to a document that was closed and reopened, is discarded.
 - **Security boundary**: Runtime config changes cannot touch `additionalFlags` or the executable paths, which are fixed at initialization. That limits a notification to include paths and warning level; it does not constrain what the client sends at startup.
@@ -153,7 +159,7 @@ The open buffer is checked as a standalone translation unit, so a header that re
 
 Diagnostics are line-scoped: each one spans columns 0 to the end of the reported line, because CL.EXE gives no column numbers for these messages. A check is killed after `checkTimeoutMs` (30 s by default), and output past `maxOutputBytes` (1 MiB by default) is truncated, which drops the tail of the diagnostic list.
 
-At most four `CL.EXE` children run at once; the rest queue, so a large revalidation after a settings change cannot spawn a process per open document. Buffers above 8 MiB are not written to the temp directory at all, and the editor shows a single `msvc6-too-large` note in their place.
+At most two checks run at once; the rest queue, so a large revalidation after a settings change cannot spawn a process per open document. `CL.EXE` itself also caps concurrent spawns at four, which only binds for a caller that bypasses that queue. Buffers above 8 MiB are not written to the temp directory at all, and the editor shows a single `msvc6-too-large` note in their place.
 
 A check that never ran, whether CL.EXE cannot be spawned or the scratch source cannot be written, publishes one error diagnostic at the top of the file saying so rather than an empty list, so a broken setup never reads as a clean file.
 
@@ -165,10 +171,10 @@ bun run setup         # Mirror MSVC6 into the Wine prefix with lowercased copies
 bun run build         # Compile TypeScript
 bun run typecheck     # Type-check src/ and tests/
 bun run test          # Run test suite
-bun run test:unit     # Tests that run without Wine or an MSVC 6.0 install
+bun run test:unit     # The four files that never need Wine or an MSVC 6.0 install
 bun run test:watch    # Watch mode
 bun run watch         # Watch + compile
-bun run check         # The pre-push gate: typecheck, then the full test suite
+bun run check         # The pre-push gate: lint, typecheck, then the full test suite
 ```
 
 `bun run check` is what `CONTRIBUTING.md` asks you to run before every push. For running a

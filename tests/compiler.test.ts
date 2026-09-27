@@ -30,6 +30,8 @@ function testConfig(): Msvc6Config {
     wineExecutable: 'wine',
     outputEncoding: 'utf8',
     useWine: true,
+    checkTimeoutMs: 30_000,
+    maxOutputBytes: 1024 * 1024,
   };
 }
 

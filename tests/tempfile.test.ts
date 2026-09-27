@@ -17,6 +17,8 @@ function testConfig(): Msvc6Config {
     wineExecutable: 'wine',
     outputEncoding: 'utf8',
     useWine: true,
+    checkTimeoutMs: 30_000,
+    maxOutputBytes: 1024 * 1024,
   };
 }
 
@@ -26,6 +28,7 @@ describe('createSimulatedTempFileStore', () => {
       const store = createSimulatedTempFileStore({ dir: '/tmp/sim' });
       const first = store.write('int a;\n', '.c');
       const second = store.write('int b;\n', '.cpp');
+      expect(second).not.toBe(first);
       store.remove(first);
       return store.events;
     };

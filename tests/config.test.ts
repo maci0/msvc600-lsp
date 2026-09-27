@@ -203,17 +203,17 @@ describe('validateConfig', () => {
   });
 
   it('auto-derives includePaths from msvcBasePath without Wine', () => {
-    const result = validateConfig({ msvcBasePath: '/opt/msvc', useWine: false });
+    const result = validateValues({ msvcBasePath: '/opt/msvc', useWine: false });
     expect(result.includePaths).toEqual(['/opt/msvc/INCLUDE']);
   });
 
   it('points includePaths at the Wine overlay, not the base, when Wine is in use', () => {
-    const result = validateConfig({ msvcBasePath: '/opt/msvc', useWine: true });
+    const result = validateValues({ msvcBasePath: '/opt/msvc', useWine: true });
     expect(result.includePaths).toEqual(['C:\\msvc6\\include']);
   });
 
   it('leaves an explicit includePaths alone when msvcBasePath is also provided', () => {
-    const result = validateConfig({
+    const result = validateValues({
       msvcBasePath: '/opt/msvc',
       useWine: false,
       includePaths: ['/somewhere/else'],

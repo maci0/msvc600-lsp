@@ -23,16 +23,14 @@ const STALE_TEMP_MIN_AGE_MS = 60 * 60 * 1000;
 /** Upper bound on the source text handed to a syntax check. */
 export const MAX_SOURCE_BYTES = 8 * 1024 * 1024;
 
-/** Concurrent CL.EXE children allowed at once; each one is a Wine process. */
+/**
+ * Concurrent CL.EXE children this module allows on its own; each one is a Wine
+ * process. The server serialises validations through its `TaskQueue` before
+ * they get here, so the cap that binds in production is the smaller of the two.
+ */
 export const MAX_CONCURRENT_CHECKS = 4;
 
-/** Wall-clock ceiling for a single CL.EXE invocation before it is killed. */
-const SYNTAX_CHECK_TIMEOUT_MS = 30000;
-
-/** Ceiling on captured CL.EXE output; past it, stdout is truncated and diagnostics may be incomplete. */
-const SYNTAX_CHECK_MAX_BUFFER_BYTES = 1024 * 1024;
-
-/** Options for the entry points that stage document text on disk. */
+/** Options for {@link syntaxCheckContent}, which stages the buffer it checks. */
 export interface TempFileOptions {
   /** Filesystem boundary to write through. Defaults to the real temp directory. */
   store?: TempFileStore;
@@ -118,21 +116,21 @@ export class DocumentTooLargeError extends Error {
  * Writes `content` to a fresh temp file with the given extension and returns
  * its path. The caller owns the file and must unlink it.
  *
- * The create is exclusive (`wx`): a path that already exists in the shared
- * temp directory is an error rather than something to truncate, so a file or
- * symlink planted by another local user is never written through. `mode`
- * applies only to a file this call creates, which is why the flag matters.
+ * Rejects content over {@link MAX_SOURCE_BYTES} before touching the disk, so an
+ * oversized buffer leaves no scratch file behind.
  */
 export function createTempSource(content: string, ext: string): string {
   const body = stripByteOrderMark(content);
+  assertWithinSourceLimit(body);
+  return createSystemTempFileStore().write(body, ext);
+}
+
+/** Throws {@link DocumentTooLargeError} when `body` is too large to check. */
+function assertWithinSourceLimit(body: string): void {
   const byteLength = Buffer.byteLength(body, 'utf-8');
   if (byteLength > MAX_SOURCE_BYTES) {
     throw new DocumentTooLargeError(byteLength);
   }
-
-  const tempFile = path.join(os.tmpdir(), `msvc6_lsp_${randomUUID()}${ext}`);
-  fs.writeFileSync(tempFile, body, { encoding: 'utf-8', mode: 0o600, flag: 'wx' });
-  return tempFile;
 }
 
 let activeChecks = 0;
@@ -209,8 +207,8 @@ function runCheck(
       // below with the configured output encoding, not assumed to be UTF-8.
       {
         env,
-        timeout: SYNTAX_CHECK_TIMEOUT_MS,
-        maxBuffer: SYNTAX_CHECK_MAX_BUFFER_BYTES,
+        timeout: config.checkTimeoutMs,
+        maxBuffer: config.maxOutputBytes,
         signal,
         killSignal: 'SIGKILL',
         encoding: 'buffer',
@@ -241,14 +239,22 @@ function runCheck(
   });
 }
 
+/** Scratch-source extension for a language id; anything but `cpp` is treated as C. */
+export function extForLanguageId(languageId: string): string {
+  return languageId === 'cpp' ? '.cpp' : '.c';
+}
+
 /**
  * Returns a fresh, unused path for a scratch source file. The random name
  * makes two concurrent checks of the same document independent rather than
  * overwriting each other's input.
+ *
+ * The server does not use this: it stages through {@link TempFileStore}, which
+ * names and creates the file in one step. This is for a caller that needs the
+ * path before the text exists.
  */
 export function createTempSourcePath(languageId: string): string {
-  const ext = languageId === 'cpp' ? '.cpp' : '.c';
-  return path.join(os.tmpdir(), `${TEMP_SOURCE_PREFIX}${randomUUID()}${ext}`);
+  return path.join(os.tmpdir(), `${TEMP_SOURCE_PREFIX}${randomUUID()}${extForLanguageId(languageId)}`);
 }
 
 /**
@@ -297,30 +303,11 @@ export function stripByteOrderMark(content: string): string {
 }
 
 /**
- * Writes `content` to a fresh temp file with `ext` and returns its path.
- * The caller owns the file and must pass the path to {@link removeTempSourceFile}.
- */
-export function createTempSourceFile(content: string, ext: string): string {
-  const tempFile = path.join(os.tmpdir(), `msvc6_lsp_${randomUUID()}${ext}`);
-  fs.writeFileSync(tempFile, stripByteOrderMark(content), { encoding: 'utf-8', mode: 0o600 });
-  return tempFile;
-}
-
-/** Deletes a temp source file. A file that is already gone is not an error. */
-export function removeTempSourceFile(tempFile: string): void {
-  try {
-    fs.unlinkSync(tempFile);
-  } catch {
-    // Already removed, or never created.
-  }
-}
-
-/**
  * Writes `content` to a temp file and runs a syntax check on it.
  * The temp file is cleaned up after the check completes.
  *
- * Exported for the test suite; the server drives {@link createTempSourceFile}
- * itself so it can abort stale checks.
+ * Exported for the test suite; the server stages through its own
+ * {@link TempFileStore} so it can abort a stale check before the write.
  */
 export async function syntaxCheckContent(
   config: Msvc6Config,
@@ -328,9 +315,8 @@ export async function syntaxCheckContent(
   languageId: string,
   opts: TempFileOptions = {},
 ): Promise<CompileResult & { tempFile: string }> {
-  const ext = languageId === 'cpp' ? '.cpp' : '.c';
   const store = opts.store ?? createSystemTempFileStore();
-  const tempFile = store.write(stripByteOrderMark(content), ext);
+  const tempFile = store.write(stripByteOrderMark(content), extForLanguageId(languageId));
 
   try {
     const result = await syntaxCheck(config, tempFile);
