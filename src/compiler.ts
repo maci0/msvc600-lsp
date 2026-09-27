@@ -5,6 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { Msvc6Config, CPP_EXTENSIONS, C_EXTENSIONS } from './config';
 import { toWinePath } from './wine-path';
+import { TempFileStore, createSystemTempFileStore } from './tempfile';
 
 /** Scratch sources are named with this prefix so a crashed run leaves identifiable leftovers. */
 const TEMP_SOURCE_PREFIX = 'msvc6_lsp_';
@@ -24,6 +25,18 @@ export const MAX_SOURCE_BYTES = 8 * 1024 * 1024;
 
 /** Concurrent CL.EXE children allowed at once; each one is a Wine process. */
 export const MAX_CONCURRENT_CHECKS = 4;
+
+/** Wall-clock ceiling for a single CL.EXE invocation before it is killed. */
+const SYNTAX_CHECK_TIMEOUT_MS = 30000;
+
+/** Ceiling on captured CL.EXE output; past it, stdout is truncated and diagnostics may be incomplete. */
+const SYNTAX_CHECK_MAX_BUFFER_BYTES = 1024 * 1024;
+
+/** Options for the entry points that stage document text on disk. */
+export interface TempFileOptions {
+  /** Filesystem boundary to write through. Defaults to the real temp directory. */
+  store?: TempFileStore;
+}
 
 /** Result of a CL.EXE syntax-check invocation. */
 export interface CompileResult {
@@ -196,8 +209,8 @@ function runCheck(
       // below with the configured output encoding, not assumed to be UTF-8.
       {
         env,
-        timeout: 30000,
-        maxBuffer: 1024 * 1024,
+        timeout: SYNTAX_CHECK_TIMEOUT_MS,
+        maxBuffer: SYNTAX_CHECK_MAX_BUFFER_BYTES,
         signal,
         killSignal: 'SIGKILL',
         encoding: 'buffer',
@@ -297,18 +310,16 @@ export async function syntaxCheckContent(
   config: Msvc6Config,
   content: string,
   languageId: string,
+  opts: TempFileOptions = {},
 ): Promise<CompileResult & { tempFile: string }> {
   const ext = languageId === 'cpp' ? '.cpp' : '.c';
-  const tempFile = createTempSource(content, ext);
+  const store = opts.store ?? createSystemTempFileStore();
+  const tempFile = store.write(stripByteOrderMark(content), ext);
 
   try {
     const result = await syntaxCheck(config, tempFile);
     return { ...result, tempFile };
   } finally {
-    try {
-      fs.unlinkSync(tempFile);
-    } catch {
-      // Temp file may already be gone — not an error.
-    }
+    store.remove(tempFile);
   }
 }

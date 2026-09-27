@@ -17,7 +17,7 @@ speak the stdio channel, and who controls the command line that reaches
 | 1 | Initialization options choose the executable and the flags | client to server (initializationOptions) | Arbitrary program execution and file writes as the editing user | None. Deliberate, but undocumented in README |
 | 2 | A hostile client sets `includePaths` to a directory it controls | server to CL.EXE | Header shadowing turns any open C/C++ file into attacker-chosen compile input | `validateConfig` type checks only (`src/config.ts:75-80`) |
 | 3 | `didChangeConfiguration` revalidates every open document | client to server | Process and memory exhaustion, editor stall | `TaskQueue` caps concurrent `CL.EXE` children at 2 (`src/server.ts:52`, `src/task-queue.ts`); debounce and abort per URI (`src/server.ts:116-127`); a notification that changes nothing is a no-op (`src/server.ts:107`) |
-| 4 | Document text is written to a shared temp directory | server to filesystem | Source code exposure to other local users; temp leak on crash | `0o600` mode and random names (`src/server.ts:224-227`); orphans from a crashed run are swept at startup (`src/server.ts:258`) |
+| 4 | Document text is written to a shared temp directory | server to filesystem | Source code exposure to other local users; temp leak on crash | `0o600` mode and random names (`src/server.ts:224-227`, `src/tempfile.ts:45-59`); orphans from a crashed run are swept at startup (`src/server.ts:258`) |
 | 5 | `CL.EXE` stdout is parsed with a regex and republished to the editor | compiler to editor | Malformed or hostile output reaching the UI; diagnostic spoofing | File-path filter to the temp file only (`src/diagnostics.ts:97`) |
 | 6 | The include overlay lowercases header names into `~/.wine` | setup script to filesystem | A header named `stdio.h` can be shadowed by a differently-cased one | None. `scripts/setup-includes.sh:23-49` |
 | 7 | No audit trail for security events | all | Incidents cannot be reconstructed | Errors only reach `connection.console.error` |
@@ -57,7 +57,8 @@ dependency surface is the four `vscode-languageserver*` packages and
 3. **Server to Wine.** On non-Windows the config-supplied `wineExecutable` is
    the program that is actually exec'd (`src/compiler.ts:88-89`).
 4. **Server to temp filesystem.** Full document text at `os.tmpdir()`
-   (`src/server.ts:224-227`).
+   (`src/server.ts:224-227`), and, for the entry points that stage content
+   themselves, through the `TempFileStore` boundary (`src/tempfile.ts:45`).
 5. **Compiler output to editor.** Compiled text is turned into diagnostics and
    shown in the editor (`src/diagnostics.ts:92`).
 6. **Setup script to `$HOME`.** `scripts/setup-includes.sh` copies binaries and
@@ -83,7 +84,7 @@ dependency surface is the four `vscode-languageserver*` packages and
   (`src/config.ts:72-74`, `src/config.ts:89-101`). A client that reaches the
   stdio channel picks which binary runs and can pass flags such as `/Fo` or
   `/Fe`, which make `CL.EXE` write files. Runtime reconfiguration cannot do
-  this (`src/server.ts:75-79`), but startup can, so the startup path is the
+  this (`src/server.ts:77-82`), but startup can, so the startup path is the
   privileged one.
 - *Tampering.* `includePaths` from either source is passed to `/I`
   (`src/compiler.ts:29-34`). A client that controls an include directory
@@ -142,6 +143,8 @@ Implemented:
   waits briefly for them to unlink their temp files: `src/server.ts:156-168`.
 - Temp files are unlinked in a `finally` block: `src/server.ts:243-248`, and
   leftovers from a killed run are removed at startup: `src/compiler.ts:168-194`.
+- Content staged through the `TempFileStore` boundary is written with the same
+  `0o600` mode and random name: `src/tempfile.ts:45-59`.
 - Document extension is checked against an allowlist before any work is done:
   `src/server.ts:193-197`.
 
@@ -182,8 +185,8 @@ reaches the compiler at all.
 ## 7. Response readiness
 
 - Security-relevant events (toolchain path changes, spawn failures) are only
-  written to `connection.console.error` (`src/server.ts:62`,
-  `src/server.ts:89`, `src/server.ts:106`). There is no persistent audit
+  written to `connection.console.error` (`src/server.ts:65`,
+  `src/server.ts:91`, `src/server.ts:103`). There is no persistent audit
   trail.
 - There is no `SECURITY.md` and no documented route from a reported
   vulnerability to a shipped fix. No contact is recorded here, because

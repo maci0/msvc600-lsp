@@ -44,7 +44,7 @@ let hasConfigurationCapability = false;
 const validationSequencer = new ValidationSequencer();
 
 /** Per-URI debounce timers for `onDidChangeContent`. */
-const pendingValidations = new Map<string, ReturnType<typeof setTimeout>>();
+const pendingValidations = new Map<string, NodeJS.Timeout>();
 
 const DEBOUNCE_MS = 300;
 
