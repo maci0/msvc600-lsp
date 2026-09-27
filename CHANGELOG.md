@@ -5,10 +5,21 @@ All notable changes to `msvc600-lsp` are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 The package is at `0.1.0`, below `1.0.0`, so a release may carry breaking changes to the
-LSP surface. No release tag has been published yet, so every entry below describes the
-package version, not a published artifact.
+LSP surface.
 
-## [Unreleased]
+## [0.1.0] - 2026-09-27
+
+### Added
+
+- LSP server for MSVC 6.0 under Wine, checking open C, C++, and header buffers through
+  `CL.EXE /Zs` and publishing the parsed diagnostics.
+- Configuration for `msvcBasePath`, `clPath`, `includePaths`, `warnLevel`, `additionalFlags`,
+  `wineExecutable`, `useWine`, `outputEncoding`, `checkTimeoutMs`, and `maxOutputBytes`,
+  resolved in the order defaults, `MSVC600_*` environment, `initializationOptions`.
+- `workspace/didChangeConfiguration` for `includePaths` and `warnLevel`; every other field is
+  fixed at initialization.
+- Debounced validation that aborts stale checks, and generation numbers that publish only the
+  newest result for a document.
 
 ### Fixed
 
@@ -105,17 +116,3 @@ package version, not a published artifact.
   server and the stale-file sweep. The sweep filtered on its own copy of the list, so a scratch
   file staged under a suffix the copy lacked would have survived every later run, holding an
   unsaved editor buffer in the temp directory.
-
-## [0.1.0] - 2026-09-27
-
-### Added
-
-- LSP server for MSVC 6.0 under Wine, checking open C, C++, and header buffers through
-  `CL.EXE /Zs` and publishing the parsed diagnostics.
-- Configuration for `msvcBasePath`, `clPath`, `includePaths`, `warnLevel`, `additionalFlags`,
-  `wineExecutable`, `useWine`, `outputEncoding`, `checkTimeoutMs`, and `maxOutputBytes`,
-  resolved in the order defaults, `MSVC600_*` environment, `initializationOptions`.
-- `workspace/didChangeConfiguration` for `includePaths` and `warnLevel`; every other field is
-  fixed at initialization.
-- Debounced validation that aborts stale checks, and generation numbers that publish only the
-  newest result for a document.
