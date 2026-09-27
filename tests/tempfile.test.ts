@@ -81,7 +81,11 @@ describe('createSystemTempFileStore', () => {
     const store = createSystemTempFileStore();
     const file = store.write('int main(void) { return 0; }\n', '.c');
     try {
-      expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+      // A POSIX mode is only reported as one on a POSIX host: Windows answers
+      // 0o666 for every writable file, so there is no owner-only mode to read.
+      if (process.platform !== 'win32') {
+        expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+      }
       expect(fs.readFileSync(file, 'utf-8')).toBe('int main(void) { return 0; }\n');
     } finally {
       store.remove(file);
@@ -273,7 +277,7 @@ describe('createTempSource', () => {
     expect(fs.readFileSync(tempFile, 'utf-8')).toBe('int main(void) { return 0; }\n');
   });
 
-  it('creates the file readable by its owner only', () => {
+  it.runIf(process.platform !== 'win32')('creates the file readable by its owner only', () => {
     const tempFile = createTempSource('int x;\n', '.c');
     created.push(tempFile);
     expect(fs.statSync(tempFile).mode & 0o777).toBe(0o600);

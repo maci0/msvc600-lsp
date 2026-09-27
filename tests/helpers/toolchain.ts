@@ -43,3 +43,20 @@ if (blocker) {
 }
 
 export const describeWithToolchain = describe.skipIf(blocker !== null);
+
+/**
+ * Config fields that make the compiler under test a fixture script instead of
+ * CL.EXE. The fixtures are `.mjs` files with a shebang, which a POSIX host runs
+ * directly; a Windows host has neither shebang handling nor an exec bit for
+ * `execFile`, and raises EFTYPE, so there node runs the script and the fixture
+ * path rides in the argument list.
+ */
+export function spyCompiler(script: string): {
+  clPath: string;
+  additionalFlags: string[];
+} {
+  if (process.platform === 'win32') {
+    return { clPath: process.execPath, additionalFlags: [script] };
+  }
+  return { clPath: script, additionalFlags: [] };
+}

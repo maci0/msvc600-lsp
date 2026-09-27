@@ -24,7 +24,8 @@ const DRIVE_PREFIX = /^[A-Za-z]:[\\/]/;
  * `C:\tmp\test.c`, which would be handed back as a native path and never reach
  * the Unix root Wine mounts on `Z:`. A path that is absolute under POSIX rules
  * keeps its leading slash and maps to `Z:`; a relative path is resolved against
- * the host's own rules, so on Windows it stays a Windows path.
+ * the host's own rules, then mapped to `Z:` unless the resolution named a drive
+ * (on a Windows host a relative path resolves to `C:\...` and stays native).
  */
 export function toWinePath(hostPath: string): string {
   if (DRIVE_PREFIX.test(hostPath)) return hostPath;
@@ -33,7 +34,11 @@ export function toWinePath(hostPath: string): string {
   }
   const absolute = path.resolve(hostPath);
   if (DRIVE_PREFIX.test(absolute)) return absolute;
-  return Z_DRIVE + absolute.replace(/\//g, '\\');
+  // A host path that resolves without a drive, which is what a POSIX input
+  // does on a Windows host, still belongs under the Unix root Wine mounts on
+  // Z:. The leading separator is dropped so the result keeps one `Z:\` prefix
+  // rather than gaining a doubled one.
+  return `${Z_DRIVE}\\${absolute.replace(/^[\\/]+/, '').replace(/\//g, '\\')}`;
 }
 
 /**

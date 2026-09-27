@@ -10,7 +10,7 @@ import {
 } from '../src/compiler';
 import { createTempSource } from '../src/tempfile';
 import { Msvc6Config, defaultConfig, DEFAULT_CHECK_TIMEOUT_MS, DEFAULT_MAX_OUTPUT_BYTES } from '../src/config';
-import { CL_EXE, MSVC_ROOT, describeWithToolchain } from './helpers/toolchain';
+import { CL_EXE, MSVC_ROOT, describeWithToolchain, spyCompiler } from './helpers/toolchain';
 
 const FIXTURES = path.resolve(__dirname, 'fixtures');
 
@@ -304,7 +304,11 @@ describe('syntaxCheck resource limits', () => {
   it.runIf(process.platform !== 'win32')(
     'kills a child that outlives checkTimeoutMs',
     async () => {
-      const cfg = { ...testConfig(), useWine: false, clPath: path.join(FIXTURES, 'slow_compiler.mjs') };
+      const cfg = {
+        ...testConfig(),
+        useWine: false,
+        ...spyCompiler(path.join(FIXTURES, 'slow_compiler.mjs')),
+      };
       const result = await syntaxCheck({ ...cfg, checkTimeoutMs: 1 }, path.join(FIXTURES, 'valid.c'));
       // Left to finish, the fixture writes nothing and exits 0. A kill
       // resolves with a non-zero exit code rather than a rejection, so the
@@ -317,7 +321,11 @@ describe('syntaxCheck resource limits', () => {
   it.runIf(process.platform !== 'win32')(
     'lets a child that finishes in time keep its exit code',
     async () => {
-      const cfg = { ...testConfig(), useWine: false, clPath: path.join(FIXTURES, 'slow_compiler.mjs') };
+      const cfg = {
+        ...testConfig(),
+        useWine: false,
+        ...spyCompiler(path.join(FIXTURES, 'slow_compiler.mjs')),
+      };
       const result = await syntaxCheck({ ...cfg, checkTimeoutMs: 30_000 }, path.join(FIXTURES, 'valid.c'));
       expect(result.exitCode).toBe(0);
     },
@@ -436,7 +444,7 @@ describe('syntaxCheck output limits', () => {
       const cfg = {
         ...testConfig(),
         useWine: false,
-        clPath: path.join(FIXTURES, 'slow_compiler.mjs'),
+        ...spyCompiler(path.join(FIXTURES, 'slow_compiler.mjs')),
         checkTimeoutMs,
       };
       const trace = path.join(os.tmpdir(), `msvc6_lsp_trace_${randomUUID()}`);
@@ -468,7 +476,7 @@ describe('syntaxCheck output limits', () => {
     const cfg = {
       ...testConfig(),
       useWine: false,
-      clPath: path.join(FIXTURES, 'noisy_compiler.mjs'),
+      ...spyCompiler(path.join(FIXTURES, 'noisy_compiler.mjs')),
       maxOutputBytes: 512,
     };
     const result = await syntaxCheck(cfg, path.join(FIXTURES, 'valid.c'));
@@ -477,7 +485,11 @@ describe('syntaxCheck output limits', () => {
   });
 
   it('keeps the full output of a quiet check under the cap', async () => {
-    const cfg = { ...testConfig(), useWine: false, clPath: path.join(FIXTURES, 'slow_compiler.mjs') };
+    const cfg = {
+      ...testConfig(),
+      useWine: false,
+      ...spyCompiler(path.join(FIXTURES, 'slow_compiler.mjs')),
+    };
     const result = await syntaxCheck(cfg, path.join(FIXTURES, 'valid.c'));
     expect(result.truncated).toBe(false);
   });

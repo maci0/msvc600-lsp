@@ -131,17 +131,19 @@ done
 
 # Fix 8.3-truncated STL header names -> full standard C++ names
 echo "Creating STL header aliases..."
-declare -A STL_MAP=(
-    ["ALGRITHM"]="algorithm"
-    ["FCTIONAL"]="functional"
-    ["STDXCEPT"]="stdexcept"
-    ["STREAMBF"]="streambuf"
-    ["STRSTREM"]="strstream"
-    ["XCEPTION"]="exception"
-)
+# Alternating truncated/full pairs. A list, not an associative array: macOS
+# ships bash 3.2, where `declare -A` fails and the whole alias pass dies.
+STL_MAP="ALGRITHM:algorithm
+FCTIONAL:functional
+STDXCEPT:stdexcept
+STREAMBF:streambuf
+STRSTREM:strstream
+XCEPTION:exception"
 
-for truncated in $(printf '%s\n' "${!STL_MAP[@]}" | sort); do
-    full="${STL_MAP[$truncated]}"
+# The listing is fixed here, so it is already in the order the sorted keys gave.
+for pair in $STL_MAP; do
+    truncated="${pair%%:*}"
+    full="${pair#*:}"
     # Read the source from the MSVC tree, not from $DEST: the overlay is this
     # script's own output, so aliasing from it would make a rerun regenerate
     # headers from a previous run's leftovers, which no removal from the

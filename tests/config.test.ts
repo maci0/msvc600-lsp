@@ -19,6 +19,13 @@ import type { WarnLevel, Msvc6Config } from '../src/config';
 /** The accepted fields of a validation result, for tests that only care about values. */
 const validateValues = (raw: unknown): Partial<Msvc6Config> => validateConfig(raw).values;
 
+/**
+ * A derived path as its segments. Joined paths carry the host's separator, so a
+ * Windows host answers `\opt\msvc\BIN\CL.EXE` for the same POSIX base; the
+ * segments, not the separators, are what the derivation promises.
+ */
+const segmentsOf = (p: string): string[] => p.split(/[\\/]+/).filter(Boolean);
+
 describe('defaultConfig', () => {
   it('returns a valid config object', () => {
     const cfg = defaultConfig();
@@ -231,13 +238,12 @@ describe('validateConfig', () => {
   it('auto-derives clPath from msvcBasePath when clPath is not provided', () => {
     const result = validateValues({ msvcBasePath: '/opt/msvc' });
     expect(result.msvcBasePath).toBe('/opt/msvc');
-    expect(result.clPath).toContain('/opt/msvc');
-    expect(result.clPath).toContain('CL.EXE');
+    expect(segmentsOf(result.clPath ?? '')).toEqual(['opt', 'msvc', 'BIN', 'CL.EXE']);
   });
 
   it('auto-derives includePaths from msvcBasePath without Wine', () => {
     const result = validateValues({ msvcBasePath: '/opt/msvc', useWine: false });
-    expect(result.includePaths).toEqual(['/opt/msvc/INCLUDE']);
+    expect(segmentsOf(result.includePaths?.[0] ?? '')).toEqual(['opt', 'msvc', 'INCLUDE']);
   });
 
   it('points includePaths at the Wine overlay, not the base, when Wine is in use', () => {
