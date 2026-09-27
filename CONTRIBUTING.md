@@ -19,16 +19,23 @@ in git.
 bun run check
 ```
 
-`check` is the whole local gate: `tsc --noEmit` over `src/`, then the full test suite. The
-repository has no CI pipeline yet, so this is the only gate; run it before every push.
+`check` is the whole local gate: `tsc --noEmit` over `src/`, `tsc -p tsconfig.test.json`
+over `src/` and `tests/`, then the full test suite. The repository has no CI pipeline yet, so
+this is the only gate; run it before every push.
+
+`tsconfig.json` is the build config and emits `dist/` from `src/` alone. `tsconfig.test.json`
+extends it with `noEmit` to type-check the test tree, which the build config excludes. Both are
+run by `bun run typecheck`; a test file that no longer compiles fails the gate, not just the
+test run.
 
 ## Test layout
 
-- `tests/config.test.ts`, `tests/diagnostics.test.ts` are pure unit tests, no external
-  process. `bun run test:unit` runs just these.
-- `tests/compiler.test.ts` and `tests/server.test.ts` spawn the real `CL.EXE` through Wine and
-  skip themselves when Wine or `VC/VC98` is absent. Put pure logic tests in the unit files so
-  they stay runnable everywhere; a test that needs CL.EXE belongs behind `describeWithToolchain`.
+- `tests/config.test.ts`, `tests/diagnostics.test.ts`, and the non-toolchain half of
+  `tests/compiler.test.ts` need no external process. `bun run test:unit` runs those three files.
+- The `describeWithToolchain` blocks in `tests/compiler.test.ts`, and all of
+  `tests/server.test.ts`, spawn the real `CL.EXE` through Wine and skip themselves when Wine or
+  `VC/VC98` is absent. Put pure logic tests outside `describeWithToolchain` so they stay
+  runnable everywhere.
 - `tests/fixtures/` holds the `.c` and `.cpp` inputs the compiler suite checks.
 
 Run one file or one test:

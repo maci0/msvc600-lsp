@@ -101,12 +101,19 @@ Diagnostics are line-scoped: each one spans columns 0 to the end of the reported
 ## Development
 
 ```bash
-bun run test          # Run test suite
-bun run test:watch    # Watch mode
-bun run build         # Compile TypeScript
-bun run watch         # Watch + compile
+bun run doctor        # Preflight: name every missing prerequisite before a test fails on it
 bun run setup         # Mirror MSVC6 into the Wine prefix with lowercased copies (Linux only)
+bun run build         # Compile TypeScript
+bun run typecheck     # Type-check src/ and tests/
+bun run test          # Run test suite
+bun run test:unit     # Tests that run without Wine or an MSVC 6.0 install
+bun run test:watch    # Watch mode
+bun run watch         # Watch + compile
+bun run check         # The pre-push gate: typecheck, then the full test suite
 ```
+
+`bun run check` is what `CONTRIBUTING.md` asks you to run before every push. For running a
+single file or a single test by name, see "Test layout" in `CONTRIBUTING.md`.
 
 ## License
 
