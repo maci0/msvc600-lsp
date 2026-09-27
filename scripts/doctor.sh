@@ -3,6 +3,33 @@
 # of letting the first test or `bun run start` fail with a spawn error.
 set -uo pipefail
 
+usage() {
+    cat <<'EOF'
+Usage: doctor.sh [--help]
+
+Checks that every prerequisite of the contributor path is present: bun, an
+installed node_modules tree, shellcheck, the MSVC 6.0 tree, and on non-Windows
+Wine plus the case-insensitive include overlay.
+
+Each missing prerequisite is written to stderr. Exits 0 when all are present,
+1 when any is missing, 2 on a bad argument.
+EOF
+}
+
+case "${1:-}" in
+-h | --help)
+    usage
+    exit 0
+    ;;
+"")
+    ;;
+*)
+    echo "doctor.sh: unknown argument '$1'" >&2
+    usage >&2
+    exit 2
+    ;;
+esac
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 CL_EXE="$PROJECT_ROOT/VC/VC98/BIN/CL.EXE"
@@ -12,8 +39,8 @@ OVERLAY_DIR="${HOME:-}/.wine/drive_c/msvc6"
 failures=0
 
 fail() {
-    echo "MISSING: $1"
-    echo "  fix: $2"
+    echo "MISSING: $1" >&2
+    echo "  fix: $2" >&2
     failures=$((failures + 1))
 }
 
@@ -70,8 +97,10 @@ Darwin)
 esac
 
 if [ "$failures" -gt 0 ]; then
-    echo
-    echo "$failures prerequisite problem(s). Tests that need the compiler will be skipped until these are in place."
+    {
+        echo
+        echo "$failures prerequisite problem(s). Tests that need the compiler will be skipped until these are in place."
+    } >&2
     exit 1
 fi
 

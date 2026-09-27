@@ -48,6 +48,11 @@ const diagnostics_1 = require("./diagnostics");
 const logging_1 = require("./logging");
 const validation_state_1 = require("./validation-state");
 const task_queue_1 = require("./task-queue");
+const cli_1 = require("./cli");
+// Before anything else: --help, --version, and a bad flag must not reach the
+// connection, which would abort with a stack trace on stdout-adjacent paths and
+// exit 1 whatever the caller asked for.
+(0, cli_1.runCli)();
 const connection = (0, node_1.createConnection)(node_1.ProposedFeatures.all);
 exports.connection = connection;
 const documents = new node_1.TextDocuments(vscode_languageserver_textdocument_1.TextDocument);

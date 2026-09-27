@@ -24,7 +24,7 @@ describe('createSimulatedTempFileStore', () => {
     const run = () => {
       const store = createSimulatedTempFileStore({ dir: '/tmp/sim' });
       const first = store.write('int a;\n', '.c');
-      store.write('int b;\n', '.cpp');
+      const second = store.write('int b;\n', '.cpp');
       store.remove(first);
       return { events: store.events, second };
     };

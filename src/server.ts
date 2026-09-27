@@ -38,6 +38,12 @@ import { parseDiagnostics, toLspDiagnostics, toFailureDiagnostic, LSP_UINT_MAX }
 import { sanitizeForLog } from './logging';
 import { ValidationSequencer, ValidationHandle } from './validation-state';
 import { TaskQueue } from './task-queue';
+import { runCli } from './cli';
+
+// Before anything else: --help, --version, and a bad flag must not reach the
+// connection, which would abort with a stack trace on stdout-adjacent paths and
+// exit 1 whatever the caller asked for.
+runCli();
 
 const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);

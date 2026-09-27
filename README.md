@@ -44,6 +44,26 @@ bun run start
 
 Configure your editor's LSP client to launch `bun dist/server.js --stdio`.
 
+### Command Line
+
+```
+Usage: msvc600-lsp [options]
+
+Options:
+      --stdio           communicate over stdin/stdout
+      --node-ipc        communicate over the Node IPC channel
+      --socket=<port>   connect to a TCP server on <port>
+  -h, --help            print help and exit
+  -V, --version         print the version and exit
+```
+
+The server has no default transport, so a bare `msvc600-lsp` is a usage error rather than a
+crash. Exit codes: `0` success, `1` the server failed to start, `2` bad argument. `--help` and
+`--version` write to stdout; a usage error writes to stderr and leaves stdout empty, so a script
+capturing stdout never reads an error page as server output. Nothing else is configurable on the
+command line: configuration comes from the environment and from `initializationOptions`, described
+below.
+
 ### Configuration
 
 Values come from three sources. Later wins:
@@ -127,18 +147,19 @@ Other fields (especially `additionalFlags`) cannot be changed at runtime, so a r
 
 ```
 src/
-├── compiler.ts         # CL.EXE invocation (syntax-check mode) and scratch sources
-├── concurrency.ts      # Counting semaphore bounding CL.EXE children
-├── config.ts           # Configuration types and validation
-├── diagnostics.ts      # MSVC output parser → LSP Diagnostic conversion
-├── encoding.ts         # Source preparation and the 0600 scratch-source write
-├── logging.ts          # Control-character stripping for the client log
-├── scheduler.ts        # Debounce timer boundary (real timer, or a stepped one in simulation)
-├── server.ts           # LSP server lifecycle, debouncing, abort handling
-├── task-queue.ts       # Bounded per-URI cancellation queue for validations
-├── tempfile.ts         # Temp-file boundary: real filesystem, or an in-memory simulated store
-├── validation-state.ts # Per-URI generation counter deciding which result may publish
-└── wine-path.ts        # POSIX ↔ Wine path conversion
+├── cli.ts               # Command-line parsing, help text, exit codes
+├── compiler.ts          # CL.EXE invocation (syntax-check mode) and scratch sources
+├── concurrency.ts       # Counting semaphore bounding CL.EXE children
+├── config.ts            # Configuration types and validation
+├── diagnostics.ts       # MSVC output parser → LSP Diagnostic conversion
+├── encoding.ts          # Source preparation and the 0600 scratch-source write
+├── logging.ts           # Control-character stripping for the client log
+├── scheduler.ts         # Debounce timer boundary (real timer, or a stepped one in simulation)
+├── server.ts            # LSP server lifecycle, debouncing, abort handling
+├── task-queue.ts        # Bounded per-URI cancellation queue for validations
+├── tempfile.ts          # Temp-file boundary: real filesystem, or an in-memory simulated store
+├── validation-state.ts  # Per-URI generation counter deciding which result may publish
+└── wine-path.ts         # POSIX ↔ Wine path conversion
 ```
 
 **Key design decisions:**
@@ -186,6 +207,10 @@ bun run ci            # What CI runs: frozen-lockfile install, then check
 
 `bun run check` is what `CONTRIBUTING.md` asks you to run before every push. For running a
 single file or a single test by name, see "Test layout" in `CONTRIBUTING.md`.
+
+Both shell scripts take `--help`. `doctor.sh` writes each missing prerequisite to stderr and
+exits 1; `setup-includes.sh` takes `--dest DIR` to mirror the overlay somewhere other than
+`$HOME/.wine/drive_c/msvc6`. A bad argument to either is exit code 2.
 
 ## License
 

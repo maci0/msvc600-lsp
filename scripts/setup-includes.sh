@@ -5,13 +5,56 @@
 set -euo pipefail
 shopt -s nullglob
 
+usage() {
+    cat <<'EOF'
+Usage: setup-includes.sh [--dest DIR] [--help]
+
+Mirrors VC/VC98 into a Wine prefix directory, writing every file under its own
+name and its lowercase name, because MSVC headers use mixed-case #include lines
+that do not resolve on a case-sensitive filesystem.
+
+  --dest DIR   target directory (default: $HOME/.wine/drive_c/msvc6)
+  -h, --help   print this help and exit
+
+Exits 0 on success, 1 when the MSVC 6.0 tree is missing, 2 on a bad argument.
+EOF
+}
+
+DEST="$HOME/.wine/drive_c/msvc6"
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+    -h | --help)
+        usage
+        exit 0
+        ;;
+    --dest)
+        if [ $# -lt 2 ]; then
+            echo "setup-includes.sh: --dest needs a directory" >&2
+            usage >&2
+            exit 2
+        fi
+        DEST="$2"
+        shift 2
+        ;;
+    --dest=*)
+        DEST="${1#--dest=}"
+        shift
+        ;;
+    *)
+        echo "setup-includes.sh: unknown argument '$1'" >&2
+        usage >&2
+        exit 2
+        ;;
+    esac
+done
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 MSVC_ROOT="$PROJECT_ROOT/VC/VC98"
-DEST="$HOME/.wine/drive_c/msvc6"
 
 if [ ! -d "$MSVC_ROOT" ]; then
-    echo "ERROR: MSVC6 directory not found at $MSVC_ROOT"
+    echo "ERROR: MSVC6 directory not found at $MSVC_ROOT" >&2
     exit 1
 fi
 

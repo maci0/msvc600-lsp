@@ -330,3 +330,51 @@ describe('LSP Server tool failure signalling', () => {
     expect(diagnostics[0].message).toMatch(/ENOENT/);
   });
 });
+
+/** Runs the built entry point with `args` and collects its output and exit code. */
+function runCli(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+  const serverPath = path.resolve(__dirname, '..', 'dist', 'server.js');
+  return new Promise((resolve, reject) => {
+    const proc = spawn(process.execPath, [serverPath, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    proc.stdout.on('data', (d) => (stdout += String(d)));
+    proc.stderr.on('data', (d) => (stderr += String(d)));
+    proc.on('error', reject);
+    proc.on('close', (code) => resolve({ code: code ?? 0, stdout, stderr }));
+  });
+}
+
+describe('command line', () => {
+  beforeAll(buildServer, 120000);
+
+  it('prints help on stdout, exits 0, and writes nothing to stderr', async () => {
+    const result = await runCli(['--help']);
+    expect(result.code).toBe(0);
+    expect(result.stderr).toBe('');
+    expect(result.stdout).toContain('Usage: msvc600-lsp [options]');
+  });
+
+  it('prints the package version on stdout, exits 0', async () => {
+    const result = await runCli(['--version']);
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(PROJECT_ROOT, 'package.json'), 'utf-8'),
+    ) as { version: string };
+    expect(result.code).toBe(0);
+    expect(result.stdout.trim()).toBe(manifest.version);
+  });
+
+  it('exits 2 on an unknown flag and keeps stdout clear of the error', async () => {
+    const result = await runCli(['--stdios']);
+    expect(result.code).toBe(2);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain("unknown option '--stdios'");
+  });
+
+  it('exits 2 with a usage error when no transport is given', async () => {
+    const result = await runCli([]);
+    expect(result.code).toBe(2);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('no transport selected');
+  });
+});
