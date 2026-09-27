@@ -19,7 +19,7 @@ Every line reference below was re-read against the code at `6c628d6`.
 | 1 | Initialization options choose the executable and the flags | client to server (initializationOptions) | Arbitrary program execution and file writes as the editing user | None. Deliberate, but undocumented in README |
 | 2 | A hostile client sets `includePaths` to a directory it controls | server to CL.EXE | Header shadowing turns any open C/C++ file into attacker-chosen compile input | `validateConfig` type checks only (`src/config.ts:112-199`) |
 | 3 | `didChangeConfiguration` revalidates every open document | client to server | Process and memory exhaustion, editor stall | `TaskQueue` caps concurrent `CL.EXE` children at 2 (`src/server.ts:68`, `src/task-queue.ts`); debounce and abort per URI (`src/server.ts:164-177`); a notification that changes nothing is a no-op (`src/server.ts:147`) |
-| 4 | Document text is written to a shared temp directory | server to filesystem | Source code exposure to other local users; temp leak on crash | `0o600` mode, random names, and an exclusive create (`src/server.ts:282-287`, `src/tempfile.ts:52-54`); orphans from a crashed run are swept at startup (`src/server.ts:335`) |
+| 4 | Document text is written to a shared temp directory | server to filesystem | Source code exposure to other local users; temp leak on crash | `0o600` mode, random names, and an exclusive create (`src/server.ts:282-287`, `src/tempfile.ts:52-61`); orphans from a crashed run are swept at startup (`src/server.ts:335`) |
 | 5 | `CL.EXE` stdout is parsed with a regex and republished to the editor | compiler to editor | Malformed or hostile output reaching the UI; diagnostic spoofing | File-path filter to the temp file only (`src/diagnostics.ts:97`) |
 | 6 | `outputEncoding` is client-supplied and selects how compiler bytes become text | client to server to compiler | A wrong label mangles output into the editor, and a mismatch between decode and filter degrades the diagnostic filter | Label checked against `TextDecoder` at load (`src/config.ts:108-110`, `src/config.ts:140-146`) |
 | 7 | The include overlay lowercases header names into `~/.wine` | setup script to filesystem | A header named `stdio.h` can be shadowed by a differently-cased one | None. `scripts/setup-includes.sh:23-31` |
@@ -40,7 +40,7 @@ listener in the tree.
 | `textDocument/didClose` | `src/server.ts:189` | Document identity |
 | Document URI (used to pick the extension) | `src/server.ts:222` | Client-supplied string, parsed with `URI.parse` |
 | `CL.EXE` stdout and stderr | `src/diagnostics.ts:41` | Compiler output parsed by regex |
-| Process environment | `src/compiler.ts:200-202` | Inherited in full; the server only adds `WINEDEBUG=-all` |
+| Process environment | `src/compiler.ts:194-196` | Inherited in full; the server only adds `WINEDEBUG=-all` |
 | `MSVC600_*` environment variables | `src/config.ts:253-289` | Read at startup, below `initializationOptions` in precedence |
 | Compiler output bytes decoded with a client-supplied label | `src/compiler.ts:83-85` | `config.outputEncoding` from the client |
 | `bun run setup` | `scripts/setup-includes.sh:10` | Writes to `$HOME/.wine/drive_c/msvc6` |
@@ -58,7 +58,7 @@ dependency surface is the four `vscode-languageserver*` packages and
    deployment, not code: the server must be launched by the user's editor and
    not exposed as a service.
 2. **Server to `CL.EXE`.** `execFile` with an argument vector
-   (`src/compiler.ts:204`). No shell, so no metacharacter injection. The
+   (`src/compiler.ts:198`). No shell, so no metacharacter injection. The
    argument vector is assembled from config in `src/compiler.ts:56-79`.
 3. **Server to Wine.** On non-Windows the config-supplied `wineExecutable` is
    the program that is actually exec'd (`src/compiler.ts:101-102`).
@@ -166,12 +166,12 @@ dependency surface is the four `vscode-languageserver*` packages and
 Implemented:
 
 - Argument vectors instead of a shell, so config values cannot smuggle in
-  shell syntax: `src/compiler.ts:204`.
-- `execFile` with `timeout: 30000`, `maxBuffer: 1 MiB`, an `AbortSignal` and
-  `SIGKILL`: `src/compiler.ts:210-217`. A timeout kill is reported as
-  `timedOut` rather than as a compile error, and the server turns it into a
-  tool-failure diagnostic, so a hung `CL.EXE` cannot be mistaken for a clean
-  file.
+  shell syntax: `src/compiler.ts:241`.
+- `execFile` with the configured `checkTimeoutMs` (30 s by default) and
+  `maxOutputBytes` (1 MiB by default), an `AbortSignal` and `SIGKILL`:
+  `src/compiler.ts:249-262`. Both bounds are validated positive integers at
+  load (`src/config.ts:139-144`); a client that raises them buys a longer-lived
+  child, not a new capability.
 - Runtime configuration is restricted to `includePaths` and `warnLevel`;
   `additionalFlags` is rejected there: `src/server.ts:135-143`, with the
   equality test that makes a repeated notification a no-op at
@@ -194,7 +194,7 @@ Implemented:
 - Temp files are unlinked in a `finally` block: `src/server.ts:306-312`, and
   leftovers from a killed run are removed at startup: `src/compiler.ts:265-296`.
 - Content staged through the `TempFileStore` boundary is written with the same
-  `0o600` mode and random name: `src/tempfile.ts:52-54`.
+  `0o600` mode and random name: `src/tempfile.ts:52-61`.
 - Document extension is checked against an allowlist before any work is done:
   `src/server.ts:242-244`, against the list at `src/config.ts:13-15`.
 

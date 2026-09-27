@@ -6,7 +6,8 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 CL_EXE="$PROJECT_ROOT/VC/VC98/BIN/CL.EXE"
-OVERLAY_DIR="$HOME/.wine/drive_c/msvc6"
+MSVC_ROOT="$PROJECT_ROOT/VC/VC98"
+OVERLAY_DIR="${HOME:-}/.wine/drive_c/msvc6"
 
 failures=0
 
@@ -14,6 +15,10 @@ fail() {
     echo "MISSING: $1"
     echo "  fix: $2"
     failures=$((failures + 1))
+}
+
+note() {
+    echo "NOTE: $1"
 }
 
 if ! command -v bun >/dev/null 2>&1; then
@@ -41,11 +46,25 @@ fi
 
 case "$(uname -s)" in
 MINGW* | CYGWIN*) ;;
-*)
+Linux)
     if ! command -v wine >/dev/null 2>&1; then
         fail "wine" "install Wine, or set useWine=false and use a native Windows CL.EXE"
     elif [ ! -d "$OVERLAY_DIR/include" ]; then
         fail "case-insensitive include overlay at $OVERLAY_DIR" "run 'bun run setup'"
+    fi
+    ;;
+Darwin)
+    # macOS volumes are case-insensitive, so the lowercase include mirror the
+    # setup script builds is only reachable on Linux, where it is required.
+    if ! command -v wine >/dev/null 2>&1; then
+        fail "wine" "install Wine (brew install --cask wine-stable), or set useWine=false and use a native Windows CL.EXE"
+    else
+        note "'bun run setup' is Linux-only. On macOS, set includePaths to $MSVC_ROOT/INCLUDE if CL.EXE cannot find its headers."
+    fi
+    ;;
+*)
+    if ! command -v wine >/dev/null 2>&1; then
+        fail "wine" "install Wine, or set useWine=false and use a native Windows CL.EXE"
     fi
     ;;
 esac

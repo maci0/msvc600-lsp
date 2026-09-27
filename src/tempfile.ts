@@ -52,7 +52,9 @@ export function createSystemTempFileStore(
   return {
     write(content: string, extension: string): string {
       const file = path.join(dir, `${TEMP_PREFIX}${generateName()}${extension}`);
-      fs.writeFileSync(file, encodeSourceText(content), { mode: TEMP_FILE_MODE });
+      // `wx` fails if the path is taken, so a file or symlink another local
+      // user planted in the shared temp directory is never written through.
+      fs.writeFileSync(file, encodeSourceText(content), { mode: TEMP_FILE_MODE, flag: 'wx' });
       return file;
     },
     remove(file: string): void {

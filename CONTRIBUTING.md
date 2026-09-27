@@ -20,11 +20,13 @@ bun run check
 ```
 
 `check` is the whole local gate, in order: `shellcheck scripts/*.sh`, then `tsc --noEmit` over
-`src/` plus `tsc -p tsconfig.test.json` over `src/` and `tests/`, then the full test suite. GitHub
-Actions runs the same gate in `.github/workflows/ci.yml`, preceded by
-`bun install --frozen-lockfile` so a lockfile that no longer resolves fails the build instead of
-being rewritten. `bun run ci` is that sequence locally. The MSVC6 integration tests skip
-themselves in CI, where `VC/VC98` is not present.
+`check` is the whole local gate, in order: `shellcheck scripts/*.sh`, then `tsc --noEmit` over
+`src/` plus `tsc -p tsconfig.test.json` over `src/` and `tests/`, then the full test suite. Run
+`bun run check` before every push. CI (`.github/workflows/ci.yml`) runs that same gate on Linux,
+preceded by `bun install --frozen-lockfile` so a lockfile that no longer resolves fails the build
+instead of being rewritten, and runs the typecheck, test suite and build on Linux, macOS and
+Windows. It installs no Wine, so the CL.EXE integration tests skip themselves there and only the
+tests that need no toolchain actually execute. `bun run ci` is the CI sequence locally.
 
 `tsconfig.json` is the build config and emits `dist/` from `src/` alone. `tsconfig.test.json`
 extends it with `noEmit` to type-check the test tree, which the build config excludes. Both are

@@ -14,6 +14,8 @@ function testConfig(): Msvc6Config {
     clPath: CL_EXE,
     includePaths: ['C:\\msvc6\\include'],
     useWine: true,
+    checkTimeoutMs: 30_000,
+    maxOutputBytes: 1024 * 1024,
   };
 }
 
@@ -22,7 +24,7 @@ describe('createSimulatedTempFileStore', () => {
     const run = () => {
       const store = createSimulatedTempFileStore({ dir: '/tmp/sim' });
       const first = store.write('int a;\n', '.c');
-      const second = store.write('int b;\n', '.cpp');
+      store.write('int b;\n', '.cpp');
       store.remove(first);
       return { events: store.events, second };
     };
@@ -77,6 +79,18 @@ describe('createSystemTempFileStore', () => {
       store.remove(file);
     }
     expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it('refuses to write through a path another file already occupies', () => {
+    const planted = path.join(os.tmpdir(), `msvc6_lsp_planted_${process.pid}.c`);
+    fs.writeFileSync(planted, 'planted\n');
+    const store = createSystemTempFileStore({ generateName: () => `planted_${process.pid}` });
+    try {
+      expect(() => store.write('int a;\n', '.c')).toThrow(/EEXIST/);
+      expect(fs.readFileSync(planted, 'utf-8')).toBe('planted\n');
+    } finally {
+      fs.rmSync(planted, { force: true });
+    }
   });
 
   it('tolerates removing a file that is already gone', () => {

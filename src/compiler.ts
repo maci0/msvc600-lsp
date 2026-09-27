@@ -242,6 +242,8 @@ function runCheck(
       executable,
       execArgs,
       // killSignal: SIGKILL because Wine ignores SIGTERM reliably.
+      // timeout and maxBuffer come from the config so a user can bound a
+      // runaway Wine or a chatty CL.EXE per machine.
       // encoding: 'buffer' keeps the raw code-page bytes; they are decoded
       // below with the configured output encoding, not assumed to be UTF-8.
       {

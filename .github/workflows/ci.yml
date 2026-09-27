@@ -8,6 +8,26 @@ permissions:
   contents: read
 
 jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        # The three platforms the README claims. Wine is not installed here, so
+        # the CL.EXE integration tests skip themselves; everything that runs
+        # without a real toolchain is what this matrix covers.
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          # must equal the packageManager pin in package.json
+          bun-version: "1.4.0"
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bunx vitest run
+      - run: bun run build
+
   check:
     runs-on: ubuntu-latest
     steps:

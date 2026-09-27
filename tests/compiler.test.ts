@@ -25,6 +25,8 @@ function testConfig(): Msvc6Config {
     clPath: CL_EXE,
     includePaths: ['C:\\msvc6\\include'],
     useWine: true,
+    checkTimeoutMs: 30_000,
+    maxOutputBytes: 1024 * 1024,
   };
 }
 
@@ -174,6 +176,36 @@ describe('syntaxCheck with useWine: false', () => {
       };
       const result = await syntaxCheck(cfg, path.join(FIXTURES, 'valid.c'));
       expect(result.stdout).toBe('Z:\\tmp\\caf\uFFFD.c');
+    },
+  );
+
+  it.runIf(process.platform !== 'win32')(
+    'bounds captured output with the configured maxOutputBytes',
+    async () => {
+      const cfg = {
+        ...testConfig(),
+        useWine: false,
+        clPath: path.join(FIXTURES, 'noisy_compiler.mjs'),
+        maxOutputBytes: 1024,
+      };
+      const result = await syntaxCheck(cfg, path.join(FIXTURES, 'valid.c'));
+      expect(result.truncated).toBe(true);
+      expect(result.stdout.length).toBeLessThanOrEqual(1024);
+    },
+  );
+
+  it.runIf(process.platform !== 'win32')(
+    'kills a check that outruns the configured checkTimeoutMs',
+    async () => {
+      const cfg = {
+        ...testConfig(),
+        useWine: false,
+        clPath: path.join(FIXTURES, 'slow_compiler.mjs'),
+        checkTimeoutMs: 1,
+      };
+      const result = await syntaxCheck(cfg, path.join(FIXTURES, 'valid.c'));
+      expect(result.truncated).toBe(false);
+      expect(result.exitCode).not.toBe(0);
     },
   );
 });
