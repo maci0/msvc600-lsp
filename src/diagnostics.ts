@@ -151,11 +151,17 @@ export function toLspDiagnostics(
  * not be spawned or the scratch source could not be written. Publishing an
  * empty list in that case would mark the document clean on the strength of
  * no result at all.
+ *
+ * `code` is carried only by the notes a client is expected to filter on, the
+ * `msvc600-check-failed` code; a note that completes a partial result (a
+ * truncated, cut-short, or unparseable run) describes that result and leaves
+ * the code off.
  */
-export function toFailureDiagnostic(message: string): Diagnostic {
+export function toFailureDiagnostic(message: string, code?: string): Diagnostic {
   return {
     range: { start: Position.create(0, 0), end: Position.create(0, 0) },
     severity: DiagnosticSeverity.Error,
+    ...(code === undefined ? {} : { code }),
     source: 'msvc6',
     message,
   };
