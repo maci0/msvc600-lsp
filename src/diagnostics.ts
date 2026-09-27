@@ -97,8 +97,20 @@ export function toLspDiagnostics(
   targetFile: string,
 ): Diagnostic[] {
   const target = normalizeForComparison(targetFile);
+  // A single CL.EXE run reports the same file on every one of its diagnostic
+  // lines, and NFC normalization is the expensive part of the comparison. One
+  // normalization per distinct file instead of one per diagnostic keeps a
+  // 5000-line report from paying for 5000 Unicode passes.
+  const normalizedFiles = new Map<string, string>();
   return parsed
-    .filter((d) => normalizeForComparison(d.file) === target)
+    .filter((d) => {
+      let normalized = normalizedFiles.get(d.file);
+      if (normalized === undefined) {
+        normalized = normalizeForComparison(d.file);
+        normalizedFiles.set(d.file, normalized);
+      }
+      return normalized === target;
+    })
     .map((d) => {
       const line = Math.min(LSP_UINT_MAX, Math.max(0, d.line - 1));
       const range: Range = {

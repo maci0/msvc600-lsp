@@ -147,6 +147,8 @@ function runCheck(config, filePath, opts) {
         const args = buildArgs(config, filePath);
         const executable = config.useWine ? config.wineExecutable : config.clPath;
         const execArgs = config.useWine ? [config.clPath, ...args] : args;
+        // Rebuilt per run: a test or a caller may change `process.env` between
+        // checks, and the child has to see that.
         const env = config.useWine
             ? { ...process.env, WINEDEBUG: '-all' }
             : { ...process.env };
@@ -164,6 +166,8 @@ function runCheck(config, filePath, opts) {
         }
         (0, child_process_1.execFile)(executable, execArgs, 
         // killSignal: SIGKILL because Wine ignores SIGTERM reliably.
+        // timeout and maxBuffer come from the config so a user can bound a
+        // runaway Wine or a chatty CL.EXE per machine.
         // encoding: 'buffer' keeps the raw code-page bytes; they are decoded
         // below with the configured output encoding, not assumed to be UTF-8.
         // timeout and maxBuffer come from the config, so a client that raises or

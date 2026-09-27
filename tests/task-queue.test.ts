@@ -138,6 +138,33 @@ describe('TaskQueue', () => {
       expect(queue.pending).toBe(0);
       await queue.drained();
     });
+
+    it('keeps the backlog in submission order when a middle entry is superseded', async () => {
+      const queue = new TaskQueue(1);
+      const blocker = deferred();
+      const ran: string[] = [];
+
+      queue.submit('blocker', () => blocker.promise);
+      for (const key of ['a', 'b', 'c', 'd', 'e']) {
+        queue.submit(key, async () => {
+          ran.push(key);
+        });
+      }
+      await flush();
+      expect(queue.pending).toBe(5);
+
+      // Superseding 'c' drops the stale entry and queues its replacement at the
+      // back, leaving every other entry where it was.
+      queue.submit('c', async () => {
+        ran.push('c-fresh');
+      });
+      await flush();
+      expect(queue.pending).toBe(5);
+
+      blocker.resolve();
+      await queue.drained();
+      expect(ran).toEqual(['a', 'b', 'd', 'e', 'c-fresh']);
+    });
   });
 
   describe('cancel', () => {

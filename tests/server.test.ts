@@ -186,6 +186,8 @@ describeWithToolchain('LSP Server Protocol', () => {
     const capabilities = response.result?.capabilities as Record<string, unknown> | undefined;
     expect(capabilities).toBeDefined();
     expect(capabilities?.textDocumentSync).toBeDefined();
+    // Incremental sync keeps a keystroke from resending the whole buffer.
+    expect((capabilities?.textDocumentSync as { change?: number }).change).toBe(2);
   });
 
   it('accepts initialized notification without crashing', async () => {

@@ -139,7 +139,11 @@ connection.onInitialize((params) => {
         capabilities: {
             textDocumentSync: {
                 openClose: true,
-                change: node_1.TextDocumentSyncKind.Full,
+                // Incremental: a keystroke costs the client one range plus the inserted
+                // text instead of the whole buffer. With Full sync every character typed
+                // resends and re-parses the entire document, which is the largest single
+                // source of traffic this server sees.
+                change: node_1.TextDocumentSyncKind.Incremental,
                 save: { includeText: false },
             },
         },

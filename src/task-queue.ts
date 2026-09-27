@@ -22,8 +22,12 @@ interface QueueEntry {
 export class TaskQueue {
   private readonly concurrency: number;
 
-  /** Waiting entries, oldest first. */
-  private queue: QueueEntry[] = [];
+  /**
+   * Waiting entries in submission order. A Map keeps FIFO order and drops an
+   * entry in constant time; an array would make every cancel, which runs on
+   * every edit and every close, scan and splice the whole backlog.
+   */
+  private queue = new Map<QueueEntry, null>();
 
   /** Live entry per key, queued or running. The handle used to supersede. */
   private byKey = new Map<string, QueueEntry>();
@@ -45,7 +49,7 @@ export class TaskQueue {
 
   /** Number of entries waiting for a free slot. */
   get pending(): number {
-    return this.queue.length;
+    return this.queue.size;
   }
 
   /**
@@ -59,7 +63,7 @@ export class TaskQueue {
 
     const entry: QueueEntry = { key, controller: new AbortController(), run };
     this.byKey.set(key, entry);
-    this.queue.push(entry);
+    this.queue.set(entry, null);
     this.pump();
   }
 
@@ -74,8 +78,7 @@ export class TaskQueue {
     this.byKey.delete(key);
     entry.controller.abort();
 
-    const queuedAt = this.queue.indexOf(entry);
-    if (queuedAt !== -1) this.queue.splice(queuedAt, 1);
+    this.queue.delete(entry);
   }
 
   /**
@@ -101,12 +104,13 @@ export class TaskQueue {
   }
 
   private isIdle(): boolean {
-    return this.queue.length === 0 && this.running.size === 0;
+    return this.queue.size === 0 && this.running.size === 0;
   }
 
   private pump(): void {
-    while (this.running.size < this.concurrency && this.queue.length > 0) {
-      const entry = this.queue.shift()!;
+    while (this.running.size < this.concurrency && this.queue.size > 0) {
+      const entry = this.queue.keys().next().value!;
+      this.queue.delete(entry);
 
       // Cancelled between submission and dispatch: drop it. The identity check
       // keeps a newer entry for the same key from being discarded with it.

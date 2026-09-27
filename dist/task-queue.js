@@ -3,8 +3,12 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.TaskQueue = void 0;
 class TaskQueue {
     concurrency;
-    /** Waiting entries, oldest first. */
-    queue = [];
+    /**
+     * Waiting entries in submission order. A Map keeps FIFO order and drops an
+     * entry in constant time; an array would make every cancel, which runs on
+     * every edit and every close, scan and splice the whole backlog.
+     */
+    queue = new Map();
     /** Live entry per key, queued or running. The handle used to supersede. */
     byKey = new Map();
     /** Entries currently inside `run`, keyed by an object only this queue holds. */
@@ -20,7 +24,7 @@ class TaskQueue {
     }
     /** Number of entries waiting for a free slot. */
     get pending() {
-        return this.queue.length;
+        return this.queue.size;
     }
     /**
      * Submits `run` under `key`, aborting whatever the key was doing before.
@@ -32,7 +36,7 @@ class TaskQueue {
         this.cancel(key);
         const entry = { key, controller: new AbortController(), run };
         this.byKey.set(key, entry);
-        this.queue.push(entry);
+        this.queue.set(entry, null);
         this.pump();
     }
     /**
@@ -45,9 +49,7 @@ class TaskQueue {
             return;
         this.byKey.delete(key);
         entry.controller.abort();
-        const queuedAt = this.queue.indexOf(entry);
-        if (queuedAt !== -1)
-            this.queue.splice(queuedAt, 1);
+        this.queue.delete(entry);
     }
     /**
      * Aborts every entry and refuses further submissions. Running tasks are
@@ -73,11 +75,12 @@ class TaskQueue {
         });
     }
     isIdle() {
-        return this.queue.length === 0 && this.running.size === 0;
+        return this.queue.size === 0 && this.running.size === 0;
     }
     pump() {
-        while (this.running.size < this.concurrency && this.queue.length > 0) {
-            const entry = this.queue.shift();
+        while (this.running.size < this.concurrency && this.queue.size > 0) {
+            const entry = this.queue.keys().next().value;
+            this.queue.delete(entry);
             // Cancelled between submission and dispatch: drop it. The identity check
             // keeps a newer entry for the same key from being discarded with it.
             if (this.byKey.get(entry.key) !== entry)

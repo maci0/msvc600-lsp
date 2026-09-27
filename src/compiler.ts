@@ -150,6 +150,8 @@ function runCheck(
     const executable = config.useWine ? config.wineExecutable : config.clPath;
     const execArgs = config.useWine ? [config.clPath, ...args] : args;
 
+    // Rebuilt per run: a test or a caller may change `process.env` between
+    // checks, and the child has to see that.
     const env = config.useWine
       ? { ...process.env, WINEDEBUG: '-all' }
       : { ...process.env };
