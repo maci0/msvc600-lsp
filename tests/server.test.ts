@@ -135,7 +135,7 @@ async function initServer(
   extraOptions: Record<string, unknown> = {},
 ): Promise<unknown> {
   const msvcRoot = MSVC_ROOT;
-  sendRequest(proc, 'initialize', {
+  const id = sendRequest(proc, 'initialize', {
     processId: process.pid,
     rootUri: null,
     capabilities: {},
@@ -151,10 +151,26 @@ async function initServer(
     },
   });
 
-  const msgs = await waitForMessages(proc, 1, 10000);
+  // Match on the response id, not on the first message of any kind: onInitialize
+  // emits console warnings and the effective-configuration info line before it
+  // returns, so `window/logMessage` notifications can arrive ahead of the reply.
+  // Waiting for "any message" would hand a log notification back as the result.
+  const msgs = await waitForMessages(
+    proc,
+    1,
+    10000,
+    (m): boolean => isLspMessage(m) && m.id === id && m.method === undefined,
+  );
+  const response = msgs.find((m): m is LspMessage => isLspMessage(m) && m.id === id);
+  if (response === undefined) {
+    throw new Error(
+      `initialize timed out: no response with id ${id} in ${msgs.length} message(s): ` +
+        JSON.stringify(msgs),
+    );
+  }
   sendNotification(proc, 'initialized', {});
   await new Promise((r) => setTimeout(r, 300));
-  return msgs[0];
+  return response;
 }
 
 /** Builds dist/ with the locally installed TypeScript. */
@@ -203,14 +219,19 @@ describeWithToolchain('LSP Server Protocol', () => {
     serverProcess = startServer();
     await initServer(serverProcess);
 
-    sendRequest(serverProcess, 'shutdown');
-    const messages = await waitForMessages(serverProcess, 1, 5000);
+    const id = sendRequest(serverProcess, 'shutdown');
+    // Match the reply by id: log notifications share the stream with it, so
+    // taking the first message would assert on whichever arrived first.
+    const messages = await waitForMessages(
+      serverProcess,
+      1,
+      5000,
+      (m): boolean => isLspMessage(m) && m.id === id && m.method === undefined,
+    );
 
-    expect(messages.length).toBeGreaterThanOrEqual(1);
-    expect(isLspMessage(messages[0])).toBe(true);
-    const response = messages[0] as LspMessage;
-    expect(response.id).toBeDefined();
-    expect(response.result).toBeNull();
+    const response = messages.find((m): m is LspMessage => isLspMessage(m) && m.id === id);
+    expect(response, `no shutdown reply with id ${id}: ${JSON.stringify(messages)}`).toBeDefined();
+    expect(response!.result).toBeNull();
   });
 
   it('publishes diagnostics for file with errors', async () => {

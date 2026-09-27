@@ -4,6 +4,10 @@
  * A burst of keystrokes for one document must cost one validation, not one per
  * edit: without it, a two-second paste arms a timer per character and every
  * armed timer eventually spawns a CL.EXE child.
+ *
+ * The debounce is the only place the server's behavior depends on elapsed
+ * wall-clock time: how many validations a burst of edits produces, and which
+ * one wins, are decided by the timer.
  */
 export interface Debouncer {
   /** Arms the timer for `key`; only the most recent call within the delay runs `task`. */

@@ -213,7 +213,7 @@ bun run doctor        # Preflight: name every missing prerequisite before a test
 bun run setup         # Mirror MSVC6 into the Wine prefix with lowercased copies (Linux only)
 bun run build         # Compile TypeScript
 bun run typecheck     # Type-check src/ and tests/
-bun run test          # Run test suite
+bun run test          # Run test suite (CL.EXE integration tests skip without Wine or MSVC 6.0)
 bun run test:unit     # Fast loop: every test file that needs no Wine, MSVC 6.0 or tsc emit
 bun run test:watch    # Watch mode
 bun run watch         # Watch + compile

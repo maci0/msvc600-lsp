@@ -1,6 +1,7 @@
 import { Msvc6Config } from './config';
 import { TempFileStore } from './tempfile';
-/** Options for the entry points that stage document text on disk. */ export interface TempFileOptions {
+/** Options for the entry points that stage document text on disk. */
+export interface TempFileOptions {
     /** Filesystem boundary to write through. Defaults to the real temp directory. */
     store?: TempFileStore;
 }
