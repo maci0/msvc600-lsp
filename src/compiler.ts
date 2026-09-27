@@ -200,8 +200,6 @@ function runCheck(
       // killSignal: SIGKILL because Wine ignores SIGTERM reliably.
       // encoding: 'buffer' keeps the raw code-page bytes; they are decoded
       // below with the configured output encoding, not assumed to be UTF-8.
-      // timeout and maxBuffer come from the config, so a client that raises or
-      // lowers checkTimeoutMs and maxOutputBytes gets what it asked for.
       {
         env,
         timeout: opts.timeoutMs ?? config.checkTimeoutMs,
