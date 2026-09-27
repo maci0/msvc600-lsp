@@ -112,6 +112,7 @@ Pass these in your client's `initializationOptions`:
 | `warnLevel` | `0-4` | `4` | Warning level (`/W0`–`/W4`) |
 | `additionalFlags` | `string[]` | `[]` | Extra flags forwarded verbatim |
 | `wineExecutable` | `string` | `"wine"` | Path to the Wine binary |
+| `outputEncoding` | `string` | `"utf8"` | Code page CL.EXE writes diagnostics in; see [Diagnostic Encoding](#diagnostic-encoding) |
 | `useWine` | `boolean` | `true` on non-Windows | Whether to invoke CL.EXE through Wine |
 | `outputEncoding` | `string` | `"utf8"` | Label `TextDecoder` uses on CL.EXE output. Use the toolchain's console code page (e.g. `cp1252`) if diagnostics come out as mojibake. An unknown label is rejected at load, since it would otherwise throw at decode time |
 | `checkTimeoutMs` | `number` | `30000` | Milliseconds before a check is killed. A hung Wine is worse than no diagnostics. A value above `600000` is rejected |
@@ -146,6 +147,29 @@ MSVC600_WARN_LEVEL=2 MSVC600_INCLUDE_PATHS='C:\msvc6\include;/opt/msvc/INCLUDE' 
 A variable that is left unset is not applied. A variable set to an empty string is rejected and
 logged, because "no include paths" and "no include paths configured" are different setups and
 only one of them is what was meant.
+
+### Diagnostic Encoding
+
+CL.EXE writes diagnostics in the console code page of the toolchain, not in UTF-8. `outputEncoding` names that code page; the server decodes the raw bytes with it before parsing, and bytes the code page cannot map become U+FFFD instead of aborting the check. Any label `TextDecoder` accepts is valid, and an unknown label is rejected at startup rather than at decode time.
+
+The default `utf8` is correct when Wine is passing UTF-8 through. A native Windows install, or a Wine prefix on a non-English locale, emits the legacy code page instead, and leaving the default there garbles every message and every path. Set it to the code page of the Windows install:
+
+| Windows locale | `outputEncoding` |
+|----------------|------------------|
+| Western European (cp1252) | `cp1252` |
+| Cyrillic (cp1251 / cp866) | `cp1251` / `cp866` |
+| Greek (cp1253) | `cp1253` |
+| Turkish (cp1254) | `cp1254` |
+| Hebrew (cp1255) | `cp1255` |
+| Arabic (cp1256) | `cp1256` |
+| Baltic (cp1257) | `cp1257` |
+| Thai (cp874) | `cp874` |
+| Japanese (cp932) | `cp932` |
+| Korean (cp949) | `cp949` |
+| Chinese, Simplified (cp936) | `cp936` |
+| Chinese, Traditional (cp950) | `cp950` |
+
+Source files are read and written as UTF-8 regardless, so the encoding setting affects only what CL.EXE prints.
 
 ### Runtime Configuration
 
