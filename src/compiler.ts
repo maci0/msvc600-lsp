@@ -1,30 +1,11 @@
 import { execFile } from 'child_process';
-import { randomUUID } from 'crypto';
-import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import { TextDecoder } from 'util';
 import { Msvc6Config, CPP_EXTENSIONS, C_EXTENSIONS } from './config';
-import { encodeSourceText, prepareSourceText } from './encoding';
+import { prepareSourceText } from './encoding';
 import { toWinePath } from './wine-path';
 import { TempFileStore, createSystemTempFileStore } from './tempfile';
 import { Semaphore } from './concurrency';
-
-/** Scratch sources are named with this prefix so a crashed run leaves identifiable leftovers. */
-const TEMP_SOURCE_PREFIX = 'msvc6_lsp_';
-
-/** Suffixes a scratch source may carry. */
-const TEMP_SOURCE_EXTENSIONS: readonly string[] = ['.c', '.cpp'];
-
-/**
- * Age at which a scratch file is treated as orphaned by a crashed run. Well
- * above the 30s check timeout, so a file in flight inside another server
- * process is never removed.
- */
-const STALE_TEMP_MIN_AGE_MS = 60 * 60 * 1000;
-
-/** Upper bound on the source text handed to a syntax check. */
-export const MAX_SOURCE_BYTES = 8 * 1024 * 1024;
 
 /**
  * Concurrent CL.EXE children allowed at once. Each one is a heavyweight process
@@ -126,38 +107,6 @@ function decodeOutput(bytes: Buffer, decoder: TextDecoder): string {
  */
 function isTimeoutKill(error: Error | null): boolean {
   return error != null && (error as { killed?: boolean }).killed === true;
-}
-
-/** Raised when a buffer exceeds {@link MAX_SOURCE_BYTES}. */
-export class DocumentTooLargeError extends Error {
-  readonly byteLength: number;
-
-  constructor(byteLength: number) {
-    super(`document is ${byteLength} bytes, over the ${MAX_SOURCE_BYTES} byte syntax-check limit`);
-    this.name = 'DocumentTooLargeError';
-    this.byteLength = byteLength;
-  }
-}
-
-/**
- * Writes `content` to a fresh temp file with the given extension and returns
- * its path. The bytes written are the prepared UTF-8 source, so the size check
- * and the file on disk agree. The caller owns the file and must unlink it.
- *
- * The create is exclusive (`wx`): a path that already exists in the shared
- * temp directory is an error rather than something to truncate, so a file or
- * symlink planted by another local user is never written through. `mode`
- * applies only to a file this call creates, which is why the flag matters.
- */
-export function createTempSource(content: string, ext: string): string {
-  const body = encodeSourceText(content);
-  if (body.byteLength > MAX_SOURCE_BYTES) {
-    throw new DocumentTooLargeError(body.byteLength);
-  }
-
-  const tempFile = path.join(os.tmpdir(), `${TEMP_SOURCE_PREFIX}${randomUUID()}${ext}`);
-  fs.writeFileSync(tempFile, body, { encoding: 'utf-8', mode: 0o600, flag: 'wx' });
-  return tempFile;
 }
 
 const checkSlots = new Semaphore(MAX_CONCURRENT_CHECKS);
@@ -277,75 +226,11 @@ function runCheck(
 }
 
 /**
- * Deletes scratch sources left behind by a run that was killed before its
- * cleanup, and returns the paths removed. A server that is restarted after a
- * crash otherwise accumulates one orphaned file per interrupted check, and no
- * later run ever reclaims them. Removing only files older than
- * {@link STALE_TEMP_MIN_AGE_MS} keeps this safe alongside a concurrently
- * running server; running it twice in a row removes nothing the second time.
- */
-export function sweepStaleTempFiles(now: number = Date.now()): string[] {
-  const removed: string[] = [];
-
-  for (const entry of fs.readdirSync(os.tmpdir())) {
-    if (!entry.startsWith(TEMP_SOURCE_PREFIX)) continue;
-    if (!TEMP_SOURCE_EXTENSIONS.some((ext) => entry.endsWith(ext))) continue;
-
-    const file = path.join(os.tmpdir(), entry);
-    let stats: fs.Stats;
-    try {
-      stats = fs.lstatSync(file);
-    } catch {
-      continue; // Vanished between listing and stat.
-    }
-    if (!stats.isFile()) continue;
-    if (now - stats.mtimeMs < STALE_TEMP_MIN_AGE_MS) continue;
-
-    try {
-      fs.unlinkSync(file);
-      removed.push(file);
-    } catch {
-      // Another process removed it first, or it is not ours to delete.
-    }
-  }
-
-  return removed;
-}
-
-/**
- * Drops a leading U+FEFF. Editors hand buffers over with a UTF-8 BOM intact,
- * and MSVC6 lexes those three bytes as source, reporting an error on the
- * first declaration of an otherwise valid file.
- */
-export function stripByteOrderMark(content: string): string {
-  return content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
-}
-
-/**
- * Writes `content` to a fresh temp file with `ext` and returns its path.
- * The caller owns the file and must pass the path to {@link removeTempSourceFile}.
- */
-export function createTempSourceFile(content: string, ext: string): string {
-  const tempFile = path.join(os.tmpdir(), `msvc6_lsp_${randomUUID()}${ext}`);
-  fs.writeFileSync(tempFile, stripByteOrderMark(content), { encoding: 'utf-8', mode: 0o600 });
-  return tempFile;
-}
-
-/** Deletes a temp source file. A file that is already gone is not an error. */
-export function removeTempSourceFile(tempFile: string): void {
-  try {
-    fs.unlinkSync(tempFile);
-  } catch {
-    // Already removed, or never created.
-  }
-}
-
-/**
  * Writes `content` to a temp file and runs a syntax check on it.
  * The temp file is cleaned up after the check completes.
  *
- * Exported for the test suite; the server drives {@link createTempSourceFile}
- * itself so it can abort stale checks.
+ * Exported for the test suite; the server stages its own scratch source through
+ * `createTempSource` so it can abort stale checks.
  */
 export async function syntaxCheckContent(
   config: Msvc6Config,

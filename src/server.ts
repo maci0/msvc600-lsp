@@ -27,13 +27,15 @@ import {
 } from './config';
 import {
   syntaxCheck,
-  createTempSource,
-  sweepStaleTempFiles,
-  DocumentTooLargeError,
   COMPILE_TIMEOUT_MS,
   MAX_OUTPUT_BYTES,
   MAX_CONCURRENT_CHECKS,
 } from './compiler';
+import {
+  createTempSource,
+  sweepStaleTempFiles,
+  DocumentTooLargeError,
+} from './tempfile';
 import { parseDiagnostics, toLspDiagnostics, toFailureDiagnostic, LSP_UINT_MAX } from './diagnostics';
 import { sanitizeForLog } from './logging';
 import { ValidationSequencer, ValidationHandle } from './validation-state';

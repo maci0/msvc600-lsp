@@ -10,7 +10,6 @@ class ValidationSequencer {
         const generation = ++this.issued;
         this.latest.set(uri, generation);
         return {
-            uri,
             generation,
             isCurrent: () => this.latest.get(uri) === generation,
         };

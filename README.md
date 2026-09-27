@@ -153,16 +153,16 @@ Other fields (especially `additionalFlags`) cannot be changed at runtime, so a r
 ```
 src/
 ├── cli.ts               # Command-line parsing, help text, exit codes
-├── compiler.ts          # CL.EXE invocation (syntax-check mode) and scratch sources
+├── compiler.ts          # CL.EXE invocation (syntax-check mode)
 ├── concurrency.ts       # Counting semaphore bounding CL.EXE children
 ├── config.ts            # Configuration types and validation
 ├── diagnostics.ts       # MSVC output parser → LSP Diagnostic conversion
-├── encoding.ts          # Source preparation and the 0600 scratch-source write
+├── encoding.ts          # Source preparation: BOM strip, lone surrogates, UTF-8 bytes
 ├── logging.ts           # Control-character stripping for the client log
 ├── scheduler.ts         # Debounce timer boundary (real timer, or a stepped one in simulation)
 ├── server.ts            # LSP server lifecycle, debouncing, abort handling
 ├── task-queue.ts        # Bounded per-URI cancellation queue for validations
-├── tempfile.ts          # Temp-file boundary: real filesystem, or an in-memory simulated store
+├── tempfile.ts          # Scratch-source boundary: staging, 0600 writes, stale-file sweep
 ├── validation-state.ts  # Per-URI generation counter deciding which result may publish
 └── wine-path.ts         # POSIX ↔ Wine path conversion
 ```

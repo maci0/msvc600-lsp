@@ -6,13 +6,9 @@ import * as path from 'path';
 import {
   syntaxCheck,
   buildArgs,
-  stripByteOrderMark,
-  sweepStaleTempFiles,
-  createTempSource,
-  DocumentTooLargeError,
-  MAX_SOURCE_BYTES,
   MAX_CONCURRENT_CHECKS,
 } from '../src/compiler';
+import { createTempSource } from '../src/tempfile';
 import { Msvc6Config, defaultConfig, DEFAULT_CHECK_TIMEOUT_MS, DEFAULT_MAX_OUTPUT_BYTES } from '../src/config';
 import { CL_EXE, MSVC_ROOT, describeWithToolchain } from './helpers/toolchain';
 
@@ -89,24 +85,6 @@ describeWithToolchain('syntaxCheck', () => {
   it('sets truncated to false for normal output', async () => {
     const result = await syntaxCheck(testConfig(), path.join(FIXTURES, 'valid.c'));
     expect(result.truncated).toBe(false);
-  });
-});
-
-describe('stripByteOrderMark', () => {
-  it('removes a leading U+FEFF', () => {
-    expect(stripByteOrderMark('\ufeffint main(void) { return 0; }')).toBe(
-      'int main(void) { return 0; }',
-    );
-  });
-
-  it('leaves content without a BOM untouched', () => {
-    expect(stripByteOrderMark('int main(void) { return 0; }')).toBe(
-      'int main(void) { return 0; }',
-    );
-  });
-
-  it('only removes the first BOM, so a BOM later in the file survives', () => {
-    expect(stripByteOrderMark('a\ufeffb')).toBe('a\ufeffb');
   });
 });
 
@@ -416,98 +394,6 @@ describeWithToolchain('syntaxCheck — abort signal', () => {
     await expect(
       syntaxCheck(testConfig(), path.join(FIXTURES, 'valid.c'), { signal: abort.signal }),
     ).rejects.toThrow();
-  });
-});
-
-describe('sweepStaleTempFiles', () => {
-  const HOUR_MS = 60 * 60 * 1000;
-
-  function makeTemp(name: string, ageMs: number): string {
-    const file = path.join(os.tmpdir(), name);
-    fs.writeFileSync(file, 'x');
-    const when = new Date(Date.now() - ageMs);
-    fs.utimesSync(file, when, when);
-    return file;
-  }
-
-  it('removes an orphaned scratch file and reports it', () => {
-    const file = makeTemp(`msvc6_lsp_orphan_${process.pid}.c`, 2 * HOUR_MS);
-    try {
-      expect(sweepStaleTempFiles()).toContain(file);
-      expect(fs.existsSync(file)).toBe(false);
-    } finally {
-      fs.rmSync(file, { force: true });
-    }
-  });
-
-  it('keeps a scratch file an in-flight check may still own', () => {
-    const file = makeTemp(`msvc6_lsp_live_${process.pid}.cpp`, 60 * 1000);
-    try {
-      expect(sweepStaleTempFiles()).not.toContain(file);
-      expect(fs.existsSync(file)).toBe(true);
-    } finally {
-      fs.rmSync(file, { force: true });
-    }
-  });
-
-  it('leaves files it did not create alone', () => {
-    const file = makeTemp(`unrelated_${process.pid}.c`, 2 * HOUR_MS);
-    try {
-      expect(sweepStaleTempFiles()).not.toContain(file);
-      expect(fs.existsSync(file)).toBe(true);
-    } finally {
-      fs.rmSync(file, { force: true });
-    }
-  });
-
-  it('is a no-op the second time over the same leftovers', () => {
-    const file = makeTemp(`msvc6_lsp_twice_${process.pid}.c`, 2 * HOUR_MS);
-    try {
-      expect(sweepStaleTempFiles()).toContain(file);
-      expect(sweepStaleTempFiles()).not.toContain(file);
-    } finally {
-      fs.rmSync(file, { force: true });
-    }
-  });
-});
-
-describe('createTempSource', () => {
-  const created: string[] = [];
-
-  afterEach(() => {
-    for (const p of created.splice(0)) {
-      try {
-        fs.unlinkSync(p);
-      } catch {
-        // already gone
-      }
-    }
-  });
-
-  it('writes the content to a fresh file the caller owns', () => {
-    const tempFile = createTempSource('int main(void) { return 0; }\n', '.c');
-    created.push(tempFile);
-    expect(fs.readFileSync(tempFile, 'utf-8')).toBe('int main(void) { return 0; }\n');
-  });
-
-  it('strips a leading BOM so the file starts at the first declaration', () => {
-    const tempFile = createTempSource('\ufeffint main(void) { return 0; }\n', '.c');
-    created.push(tempFile);
-    expect(fs.readFileSync(tempFile, 'utf-8')).toBe('int main(void) { return 0; }\n');
-  });
-
-  it('creates the file readable by its owner only', () => {
-    const tempFile = createTempSource('int x;\n', '.c');
-    created.push(tempFile);
-    expect(fs.statSync(tempFile).mode & 0o777).toBe(0o600);
-  });
-
-  it('refuses content over the syntax-check size limit, leaving no file behind', () => {
-    const before = fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('msvc6_lsp_')).length;
-    const oversized = 'a'.repeat(MAX_SOURCE_BYTES + 1);
-    expect(() => createTempSource(oversized, '.c')).toThrow(DocumentTooLargeError);
-    const after = fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('msvc6_lsp_')).length;
-    expect(after).toBe(before);
   });
 });
 

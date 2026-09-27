@@ -35,15 +35,15 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.documents = exports.connection = void 0;
-exports.getConfig = getConfig;
 exports.scheduleValidation = scheduleValidation;
 const node_1 = require("vscode-languageserver/node");
 const vscode_languageserver_textdocument_1 = require("vscode-languageserver-textdocument");
 const vscode_uri_1 = require("vscode-uri");
-const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
+const fs = __importStar(require("fs"));
 const config_1 = require("./config");
 const compiler_1 = require("./compiler");
+const tempfile_1 = require("./tempfile");
 const diagnostics_1 = require("./diagnostics");
 const logging_1 = require("./logging");
 const validation_state_1 = require("./validation-state");
@@ -70,18 +70,19 @@ const validationSequencer = new validation_state_1.ValidationSequencer();
 /** Per-URI debounce timers for `onDidChangeContent`. */
 const pendingValidations = new Map();
 const DEBOUNCE_MS = 300;
-/**
- * At most this many CL.EXE children exist at once. Each check is a heavyweight
- * process (a full Wine services startup on non-Windows), so the number is kept
- * at the parallelism a developer machine can actually absorb; the queue
- * serialises the rest rather than dropping them.
- */
-const MAX_CONCURRENT_CHECKS = 2;
+/** Drops a document's pending debounce timer, if one is still waiting. */
+function clearPendingValidation(uri) {
+    const pending = pendingValidations.get(uri);
+    if (!pending)
+        return;
+    clearTimeout(pending);
+    pendingValidations.delete(uri);
+}
 /**
  * Validation tasks, one per document URI. A new task for a URI aborts the
  * previous one, so a superseded edit never reaches the compiler.
  */
-const validationQueue = new task_queue_1.TaskQueue(MAX_CONCURRENT_CHECKS);
+const validationQueue = new task_queue_1.TaskQueue(compiler_1.MAX_CONCURRENT_CHECKS);
 /** Diagnostic code used for failures of the check itself, not of the source file. */
 const TOOL_ERROR_CODE = 'msvc600-check-failed';
 /** Range covering a whole first line, where tool-failure diagnostics are anchored. */
@@ -188,9 +189,7 @@ connection.onDidChangeConfiguration((change) => {
 });
 documents.onDidChangeContent((change) => {
     const uri = change.document.uri;
-    const existing = pendingValidations.get(uri);
-    if (existing)
-        clearTimeout(existing);
+    clearPendingValidation(uri);
     pendingValidations.set(uri, setTimeout(() => {
         pendingValidations.delete(uri);
         const doc = documents.get(uri);
@@ -200,21 +199,12 @@ documents.onDidChangeContent((change) => {
     }, DEBOUNCE_MS));
 });
 documents.onDidSave((change) => {
-    const uri = change.document.uri;
-    const pending = pendingValidations.get(uri);
-    if (pending) {
-        clearTimeout(pending);
-        pendingValidations.delete(uri);
-    }
+    clearPendingValidation(change.document.uri);
     scheduleValidation(change.document);
 });
 documents.onDidClose((event) => {
     const uri = event.document.uri;
-    const pending = pendingValidations.get(uri);
-    if (pending) {
-        clearTimeout(pending);
-        pendingValidations.delete(uri);
-    }
+    clearPendingValidation(uri);
     validationQueue.cancel(uri);
     validationSequencer.close(uri);
     connection.sendDiagnostics({ uri, diagnostics: [] });
@@ -262,41 +252,25 @@ function errorMessage(e) {
  * even while it waits for a free slot.
  */
 function scheduleValidation(textDocument) {
-    const ext = getDocumentExtension(textDocument);
-    if (!config_1.ALL_EXTENSIONS.includes(ext)) {
+    const documentExt = getDocumentExtension(textDocument);
+    if (!config_1.ALL_EXTENSIONS.includes(documentExt)) {
         return;
     }
     const uri = textDocument.uri;
     const handle = validationSequencer.begin(uri);
-    const langId = config_1.CPP_EXTENSIONS.includes(ext)
-        ? 'cpp'
-        : textDocument.languageId === 'cpp'
-            ? 'cpp'
-            : 'c';
-    const tempFile = (0, compiler_1.createTempSourcePath)(langId);
-    // Content and temp path are snapshotted at submission so a queued check
-    // never re-reads a document that has since changed.
+    const ext = config_1.CPP_EXTENSIONS.includes(documentExt) || textDocument.languageId === 'cpp' ? '.cpp' : '.c';
+    // Content is snapshotted at submission so a queued check never re-reads a
+    // document that has since changed.
     const content = textDocument.getText();
-    validationQueue.submit(uri, (signal) => runValidation(uri, handle, content, tempFile, signal));
+    validationQueue.submit(uri, (signal) => runValidation(uri, handle, content, ext, signal));
 }
-async function runValidation(uri, handle, content, tempFile, signal) {
+async function runValidation(uri, handle, content, ext, signal) {
+    let tempFile;
     try {
         // A newer edit aborted this one while it sat in the queue.
         if (signal.aborted)
             return;
-        const body = (0, compiler_1.stripByteOrderMark)(content);
-        const byteLength = Buffer.byteLength(body, 'utf-8');
-        if (byteLength > compiler_1.MAX_SOURCE_BYTES) {
-            throw new compiler_1.DocumentTooLargeError(byteLength);
-        }
-        // The create is exclusive (`wx`): a path already taken in the shared temp
-        // directory is an error rather than something to truncate, so a file or
-        // symlink planted by another local user is never written through.
-        fs.writeFileSync(tempFile, body, {
-            encoding: 'utf-8',
-            mode: 0o600,
-            flag: 'wx',
-        });
+        tempFile = (0, tempfile_1.createTempSource)(content, ext);
         const result = await (0, compiler_1.syntaxCheck)(config, tempFile, { signal });
         if (!handle.isCurrent())
             return;
@@ -317,7 +291,7 @@ async function runValidation(uri, handle, content, tempFile, signal) {
             return;
         if (!handle.isCurrent())
             return;
-        if (e instanceof compiler_1.DocumentTooLargeError) {
+        if (e instanceof tempfile_1.DocumentTooLargeError) {
             connection.sendDiagnostics({ uri, diagnostics: [tooLargeDiagnostic(e)] });
             return;
         }
@@ -334,11 +308,13 @@ async function runValidation(uri, handle, content, tempFile, signal) {
         connection.console.error(`Validation error (${uri}): ${String(e)}`);
     }
     finally {
-        try {
-            fs.unlinkSync(tempFile);
-        }
-        catch {
-            // Temp file may already be gone or was never created.
+        if (tempFile !== undefined) {
+            try {
+                fs.unlinkSync(tempFile);
+            }
+            catch {
+                // Temp file may already be gone.
+            }
         }
     }
 }
@@ -360,13 +336,9 @@ connection.listen();
 // Reclaim scratch sources from a previous run that was killed before its
 // cleanup; without this every crash leaves one orphan behind forever.
 try {
-    (0, compiler_1.sweepStaleTempFiles)();
+    (0, tempfile_1.sweepStaleTempFiles)();
 }
 catch (e) {
-    connection.console.error(`Stale temp sweep failed: ${String(e)}`);
-}
-/** Returns the current live config — typed `Readonly` to prevent accidental mutation. */
-function getConfig() {
-    return config;
+    logValidationError('Stale temp sweep failed', e);
 }
 //# sourceMappingURL=server.js.map

@@ -33,39 +33,26 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.DocumentTooLargeError = exports.MAX_OUTPUT_BYTES = exports.COMPILE_TIMEOUT_MS = exports.MAX_CONCURRENT_CHECKS = exports.MAX_SOURCE_BYTES = void 0;
+exports.MAX_OUTPUT_BYTES = exports.COMPILE_TIMEOUT_MS = exports.MAX_CONCURRENT_CHECKS = void 0;
 exports.buildArgs = buildArgs;
-exports.createTempSource = createTempSource;
 exports.syntaxCheck = syntaxCheck;
-exports.createTempSourcePath = createTempSourcePath;
-exports.sweepStaleTempFiles = sweepStaleTempFiles;
-exports.stripByteOrderMark = stripByteOrderMark;
-exports.createTempSourceFile = createTempSourceFile;
-exports.removeTempSourceFile = removeTempSourceFile;
 exports.syntaxCheckContent = syntaxCheckContent;
 const child_process_1 = require("child_process");
-const crypto_1 = require("crypto");
-const fs = __importStar(require("fs"));
-const os = __importStar(require("os"));
 const path = __importStar(require("path"));
 const util_1 = require("util");
 const config_1 = require("./config");
+const encoding_1 = require("./encoding");
 const wine_path_1 = require("./wine-path");
 const tempfile_1 = require("./tempfile");
-/** Scratch sources are named with this prefix so a crashed run leaves identifiable leftovers. */
-const TEMP_SOURCE_PREFIX = 'msvc6_lsp_';
-/** Suffixes a scratch source may carry. */
-const TEMP_SOURCE_EXTENSIONS = ['.c', '.cpp'];
+const concurrency_1 = require("./concurrency");
 /**
- * Age at which a scratch file is treated as orphaned by a crashed run. Well
- * above the 30s check timeout, so a file in flight inside another server
- * process is never removed.
+ * Concurrent CL.EXE children allowed at once. Each one is a heavyweight process
+ * (a full Wine services startup on non-Windows), so the number is kept at the
+ * parallelism a developer machine absorbs; the rest queue rather than dropping.
+ * The server schedules through the same number, so the two layers of the
+ * pipeline agree on one limit.
  */
-const STALE_TEMP_MIN_AGE_MS = 60 * 60 * 1000;
-/** Upper bound on the source text handed to a syntax check. */
-exports.MAX_SOURCE_BYTES = 8 * 1024 * 1024;
-/** Concurrent CL.EXE children allowed at once; each one is a Wine process. */
-exports.MAX_CONCURRENT_CHECKS = 4;
+exports.MAX_CONCURRENT_CHECKS = 2;
 /** Wall-clock limit for one CL.EXE run before the process is killed. */
 exports.COMPILE_TIMEOUT_MS = 30000;
 /** Cap on captured stdout and stderr, per stream. */
@@ -127,52 +114,7 @@ function decodeOutput(bytes, decoder) {
 function isTimeoutKill(error) {
     return error != null && error.killed === true;
 }
-/** Raised when a buffer exceeds {@link MAX_SOURCE_BYTES}. */
-class DocumentTooLargeError extends Error {
-    byteLength;
-    constructor(byteLength) {
-        super(`document is ${byteLength} bytes, over the ${exports.MAX_SOURCE_BYTES} byte syntax-check limit`);
-        this.name = 'DocumentTooLargeError';
-        this.byteLength = byteLength;
-    }
-}
-exports.DocumentTooLargeError = DocumentTooLargeError;
-/**
- * Writes `content` to a fresh temp file with the given extension and returns
- * its path. The caller owns the file and must unlink it.
- *
- * The create is exclusive (`wx`): a path that already exists in the shared
- * temp directory is an error rather than something to truncate, so a file or
- * symlink planted by another local user is never written through. `mode`
- * applies only to a file this call creates, which is why the flag matters.
- */
-function createTempSource(content, ext) {
-    const body = stripByteOrderMark(content);
-    const byteLength = Buffer.byteLength(body, 'utf-8');
-    if (byteLength > exports.MAX_SOURCE_BYTES) {
-        throw new DocumentTooLargeError(byteLength);
-    }
-    const tempFile = path.join(os.tmpdir(), `msvc6_lsp_${(0, crypto_1.randomUUID)()}${ext}`);
-    fs.writeFileSync(tempFile, body, { encoding: 'utf-8', mode: 0o600, flag: 'wx' });
-    return tempFile;
-}
-let activeChecks = 0;
-const checkQueue = [];
-function acquireCheckSlot() {
-    if (activeChecks < exports.MAX_CONCURRENT_CHECKS) {
-        activeChecks += 1;
-        return Promise.resolve();
-    }
-    return new Promise((resolve) => checkQueue.push(resolve));
-}
-function releaseCheckSlot() {
-    const next = checkQueue.shift();
-    if (next) {
-        next();
-        return;
-    }
-    activeChecks -= 1;
-}
+const checkSlots = new concurrency_1.Semaphore(exports.MAX_CONCURRENT_CHECKS);
 function abortError() {
     const error = new Error('CL.EXE check aborted');
     error.code = 'ABORT_ERR';
@@ -183,7 +125,8 @@ function abortError() {
  *
  * At most {@link MAX_CONCURRENT_CHECKS} children run at once; the rest queue,
  * so a burst of open documents cannot spawn an unbounded number of Wine
- * processes. A queued check whose signal aborts is dropped before it starts.
+ * processes. A queued check whose signal aborts leaves the queue without ever
+ * taking a slot.
  *
  * Always resolves — compiler errors are reported via `exitCode` and
  * `rawOutput`, not via promise rejection. Rejects only when no check could
@@ -193,16 +136,16 @@ function abortError() {
  * exit code that carries no diagnostic meaning.
  */
 async function syntaxCheck(config, filePath, opts = {}) {
-    if (opts.signal?.aborted)
+    const release = await checkSlots.acquire(opts.signal);
+    if (release === null)
         throw abortError();
-    await acquireCheckSlot();
     try {
         if (opts.signal?.aborted)
             throw abortError();
         return await runCheck(config, filePath, opts);
     }
     finally {
-        releaseCheckSlot();
+        release();
     }
 }
 function runCheck(config, filePath, opts) {
@@ -227,12 +170,16 @@ function runCheck(config, filePath, opts) {
         }
         (0, child_process_1.execFile)(executable, execArgs, 
         // killSignal: SIGKILL because Wine ignores SIGTERM reliably.
+        // timeout and maxBuffer come from the config so a user can bound a
+        // runaway Wine or a chatty CL.EXE per machine.
         // encoding: 'buffer' keeps the raw code-page bytes; they are decoded
         // below with the configured output encoding, not assumed to be UTF-8.
+        // timeout and maxBuffer come from the config, so a client that raises or
+        // lowers checkTimeoutMs and maxOutputBytes gets what it asked for.
         {
             env,
-            timeout: opts.timeoutMs ?? exports.COMPILE_TIMEOUT_MS,
-            maxBuffer: exports.MAX_OUTPUT_BYTES,
+            timeout: opts.timeoutMs ?? config.checkTimeoutMs,
+            maxBuffer: config.maxOutputBytes,
             signal: opts.signal,
             killSignal: 'SIGKILL',
             encoding: 'buffer',
@@ -261,88 +208,16 @@ function runCheck(config, filePath, opts) {
     });
 }
 /**
- * Returns a fresh, unused path for a scratch source file. The random name
- * makes two concurrent checks of the same document independent rather than
- * overwriting each other's input.
- */
-function createTempSourcePath(languageId) {
-    const ext = languageId === 'cpp' ? '.cpp' : '.c';
-    return path.join(os.tmpdir(), `${TEMP_SOURCE_PREFIX}${(0, crypto_1.randomUUID)()}${ext}`);
-}
-/**
- * Deletes scratch sources left behind by a run that was killed before its
- * cleanup, and returns the paths removed. A server that is restarted after a
- * crash otherwise accumulates one orphaned file per interrupted check, and no
- * later run ever reclaims them. Removing only files older than
- * {@link STALE_TEMP_MIN_AGE_MS} keeps this safe alongside a concurrently
- * running server; running it twice in a row removes nothing the second time.
- */
-function sweepStaleTempFiles(now = Date.now()) {
-    const removed = [];
-    for (const entry of fs.readdirSync(os.tmpdir())) {
-        if (!entry.startsWith(TEMP_SOURCE_PREFIX))
-            continue;
-        if (!TEMP_SOURCE_EXTENSIONS.some((ext) => entry.endsWith(ext)))
-            continue;
-        const file = path.join(os.tmpdir(), entry);
-        let stats;
-        try {
-            stats = fs.lstatSync(file);
-        }
-        catch {
-            continue; // Vanished between listing and stat.
-        }
-        if (!stats.isFile())
-            continue;
-        if (now - stats.mtimeMs < STALE_TEMP_MIN_AGE_MS)
-            continue;
-        try {
-            fs.unlinkSync(file);
-            removed.push(file);
-        }
-        catch {
-            // Another process removed it first, or it is not ours to delete.
-        }
-    }
-    return removed;
-}
-/**
- * Drops a leading U+FEFF. Editors hand buffers over with a UTF-8 BOM intact,
- * and MSVC6 lexes those three bytes as source, reporting an error on the
- * first declaration of an otherwise valid file.
- */
-function stripByteOrderMark(content) {
-    return content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
-}
-/**
- * Writes `content` to a fresh temp file with `ext` and returns its path.
- * The caller owns the file and must pass the path to {@link removeTempSourceFile}.
- */
-function createTempSourceFile(content, ext) {
-    const tempFile = path.join(os.tmpdir(), `msvc6_lsp_${(0, crypto_1.randomUUID)()}${ext}`);
-    fs.writeFileSync(tempFile, stripByteOrderMark(content), { encoding: 'utf-8', mode: 0o600 });
-    return tempFile;
-}
-/** Deletes a temp source file. A file that is already gone is not an error. */
-function removeTempSourceFile(tempFile) {
-    try {
-        fs.unlinkSync(tempFile);
-    }
-    catch {
-        // Already removed, or never created.
-    }
-}
-/**
  * Writes `content` to a temp file and runs a syntax check on it.
  * The temp file is cleaned up after the check completes.
  *
- * Exported for the test suite; the server drives {@link createTempSourceFile}
- * itself so it can abort stale checks.
+ * Exported for the test suite; the server stages its own scratch source through
+ * `createTempSource` so it can abort stale checks.
  */
 async function syntaxCheckContent(config, content, languageId, opts = {}) {
     const ext = languageId === 'cpp' ? '.cpp' : '.c';
     const store = opts.store ?? (0, tempfile_1.createSystemTempFileStore)();
-    const tempFile = store.write(stripByteOrderMark(content), ext);
+    const tempFile = store.write((0, encoding_1.prepareSourceText)(content), ext);
     try {
         const result = await syntaxCheck(config, tempFile);
         return { ...result, tempFile };

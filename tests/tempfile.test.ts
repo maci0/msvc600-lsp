@@ -1,11 +1,18 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { syntaxCheckContent } from '../src/compiler';
 import { Msvc6Config, defaultConfig, DEFAULT_CHECK_TIMEOUT_MS, DEFAULT_MAX_OUTPUT_BYTES } from '../src/config';
 import { CL_EXE, MSVC_ROOT } from './helpers/toolchain';
-import { createSystemTempFileStore, createSimulatedTempFileStore } from '../src/tempfile';
+import {
+  createSystemTempFileStore,
+  createSimulatedTempFileStore,
+  createTempSource,
+  sweepStaleTempFiles,
+  DocumentTooLargeError,
+  MAX_SOURCE_BYTES,
+} from '../src/tempfile';
 
 function testConfig(): Msvc6Config {
   return {
@@ -146,3 +153,95 @@ describe('syntaxCheckContent through a simulated store', () => {
     expect(store.events).toHaveLength(0);
   });
 });
+describe('sweepStaleTempFiles', () => {
+  const HOUR_MS = 60 * 60 * 1000;
+
+  function makeTemp(name: string, ageMs: number): string {
+    const file = path.join(os.tmpdir(), name);
+    fs.writeFileSync(file, 'x');
+    const when = new Date(Date.now() - ageMs);
+    fs.utimesSync(file, when, when);
+    return file;
+  }
+
+  it('removes an orphaned scratch file and reports it', () => {
+    const file = makeTemp(`msvc6_lsp_orphan_${process.pid}.c`, 2 * HOUR_MS);
+    try {
+      expect(sweepStaleTempFiles()).toContain(file);
+      expect(fs.existsSync(file)).toBe(false);
+    } finally {
+      fs.rmSync(file, { force: true });
+    }
+  });
+
+  it('keeps a scratch file an in-flight check may still own', () => {
+    const file = makeTemp(`msvc6_lsp_live_${process.pid}.cpp`, 60 * 1000);
+    try {
+      expect(sweepStaleTempFiles()).not.toContain(file);
+      expect(fs.existsSync(file)).toBe(true);
+    } finally {
+      fs.rmSync(file, { force: true });
+    }
+  });
+
+  it('leaves files it did not create alone', () => {
+    const file = makeTemp(`unrelated_${process.pid}.c`, 2 * HOUR_MS);
+    try {
+      expect(sweepStaleTempFiles()).not.toContain(file);
+      expect(fs.existsSync(file)).toBe(true);
+    } finally {
+      fs.rmSync(file, { force: true });
+    }
+  });
+
+  it('is a no-op the second time over the same leftovers', () => {
+    const file = makeTemp(`msvc6_lsp_twice_${process.pid}.c`, 2 * HOUR_MS);
+    try {
+      expect(sweepStaleTempFiles()).toContain(file);
+      expect(sweepStaleTempFiles()).not.toContain(file);
+    } finally {
+      fs.rmSync(file, { force: true });
+    }
+  });
+});
+
+describe('createTempSource', () => {
+  const created: string[] = [];
+
+  afterEach(() => {
+    for (const p of created.splice(0)) {
+      try {
+        fs.unlinkSync(p);
+      } catch {
+        // already gone
+      }
+    }
+  });
+
+  it('writes the content to a fresh file the caller owns', () => {
+    const tempFile = createTempSource('int main(void) { return 0; }\n', '.c');
+    created.push(tempFile);
+    expect(fs.readFileSync(tempFile, 'utf-8')).toBe('int main(void) { return 0; }\n');
+  });
+
+  it('strips a leading BOM so the file starts at the first declaration', () => {
+    const tempFile = createTempSource('\ufeffint main(void) { return 0; }\n', '.c');
+    created.push(tempFile);
+    expect(fs.readFileSync(tempFile, 'utf-8')).toBe('int main(void) { return 0; }\n');
+  });
+
+  it('creates the file readable by its owner only', () => {
+    const tempFile = createTempSource('int x;\n', '.c');
+    created.push(tempFile);
+    expect(fs.statSync(tempFile).mode & 0o777).toBe(0o600);
+  });
+
+  it('refuses content over the syntax-check size limit, leaving no file behind', () => {
+    const before = fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('msvc6_lsp_')).length;
+    const oversized = 'a'.repeat(MAX_SOURCE_BYTES + 1);
+    expect(() => createTempSource(oversized, '.c')).toThrow(DocumentTooLargeError);
+    const after = fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('msvc6_lsp_')).length;
+    expect(after).toBe(before);
+  });
+});
+

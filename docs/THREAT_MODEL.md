@@ -19,7 +19,7 @@ Every line reference below was re-read against the code at `6c628d6`.
 | 1 | Initialization options choose the executable and the flags | client to server (initializationOptions) | Arbitrary program execution and file writes as the editing user | None. Deliberate, but undocumented in README |
 | 2 | A hostile client sets `includePaths` to a directory it controls | server to CL.EXE | Header shadowing turns any open C/C++ file into attacker-chosen compile input | `validateConfig` type checks only (`src/config.ts:112-199`) |
 | 3 | `didChangeConfiguration` revalidates every open document | client to server | Process and memory exhaustion, editor stall | `TaskQueue` caps concurrent `CL.EXE` children at 2 (`src/server.ts:68`, `src/task-queue.ts`); debounce and abort per URI (`src/server.ts:164-177`); a notification that changes nothing is a no-op (`src/server.ts:147`) |
-| 4 | Document text is written to a shared temp directory | server to filesystem | Source code exposure to other local users; temp leak on crash | `0o600` mode, random names, and an exclusive create (`src/server.ts:282-287`, `src/tempfile.ts:52-61`); orphans from a crashed run are swept at startup (`src/server.ts:335`) |
+| 4 | Document text is written to a shared temp directory | server to filesystem | Source code exposure to other local users; temp leak on crash | `0o600` mode, random names, and an exclusive create (`src/server.ts:317`, `src/tempfile.ts:88-97`); orphans from a crashed run are swept at startup (`src/server.ts:395`) |
 | 5 | `CL.EXE` stdout is parsed with a regex and republished to the editor | compiler to editor | Malformed or hostile output reaching the UI; diagnostic spoofing | File-path filter to the temp file only (`src/diagnostics.ts:97`) |
 | 6 | `outputEncoding` is client-supplied and selects how compiler bytes become text | client to server to compiler | A wrong label mangles output into the editor, and a mismatch between decode and filter degrades the diagnostic filter | Label checked against `TextDecoder` at load (`src/config.ts:108-110`, `src/config.ts:140-146`) |
 | 7 | The include overlay lowercases header names into `~/.wine` | setup script to filesystem | A header named `stdio.h` can be shadowed by a differently-cased one | None. `scripts/setup-includes.sh:23-31` |
@@ -40,9 +40,9 @@ listener in the tree.
 | `textDocument/didClose` | `src/server.ts:189` | Document identity |
 | Document URI (used to pick the extension) | `src/server.ts:222` | Client-supplied string, parsed with `URI.parse` |
 | `CL.EXE` stdout and stderr | `src/diagnostics.ts:41` | Compiler output parsed by regex |
-| Process environment | `src/compiler.ts:194-196` | Inherited in full; the server only adds `WINEDEBUG=-all` |
+| Process environment | `src/compiler.ts:160-162` | Inherited in full; the server only adds `WINEDEBUG=-all` |
 | `MSVC600_*` environment variables | `src/config.ts:253-289` | Read at startup, below `initializationOptions` in precedence |
-| Compiler output bytes decoded with a client-supplied label | `src/compiler.ts:83-85` | `config.outputEncoding` from the client |
+| Compiler output bytes decoded with a client-supplied label | `src/compiler.ts:169` | `config.outputEncoding` from the client |
 | `bun run setup` | `scripts/setup-includes.sh:10` | Writes to `$HOME/.wine/drive_c/msvc6` |
 | `bun run doctor` | `scripts/doctor.sh:1` | Reads the environment and prints resolved paths; no writes |
 
@@ -58,12 +58,12 @@ dependency surface is the four `vscode-languageserver*` packages and
    deployment, not code: the server must be launched by the user's editor and
    not exposed as a service.
 2. **Server to `CL.EXE`.** `execFile` with an argument vector
-   (`src/compiler.ts:198`). No shell, so no metacharacter injection. The
-   argument vector is assembled from config in `src/compiler.ts:56-79`.
+   (`src/compiler.ts:180`). No shell, so no metacharacter injection. The
+   argument vector is assembled from config in `src/compiler.ts:53-75`.
 3. **Server to Wine.** On non-Windows the config-supplied `wineExecutable` is
-   the program that is actually exec'd (`src/compiler.ts:101-102`).
+   the program that is actually exec'd (`src/compiler.ts:157-158`).
 4. **Server to temp filesystem.** Full document text at `os.tmpdir()`
-   (`src/server.ts:282-287`, name from `src/compiler.ts:156-159`), and, for
+   (`src/server.ts:317`, name from `src/tempfile.ts:88-97`), and, for
    the entry points that stage content themselves, through the `TempFileStore`
    boundary (`src/tempfile.ts:25`).
 5. **Compiler output to editor.** Compiled text is turned into diagnostics and
@@ -111,7 +111,7 @@ dependency surface is the four `vscode-languageserver*` packages and
   decides how the default `wineExecutable` resolves, so the added reach is
   `additionalFlags` and an absolute path outside `PATH`.
 - *Tampering.* `includePaths` from either source is passed to `/I`
-  (`src/compiler.ts:42-47`). A client that controls an include directory
+  (`src/compiler.ts:58-61`). A client that controls an include directory
   controls the headers the preprocessor sees for every open file.
 - *Denial of service.* `didChangeConfiguration` queues a check for every open
   document (`src/server.ts:161-162`); the queue runs at most
@@ -120,7 +120,7 @@ dependency surface is the four `vscode-languageserver*` packages and
   Document text is still unbounded, and the LSP layer accepts an unbounded
   number of open documents.
 - *Information disclosure.* `outputEncoding` names the `TextDecoder` label
-  used on raw compiler bytes (`src/compiler.ts:83-85`). It is checked against
+  used on raw compiler bytes (`src/compiler.ts:169`). It is checked against
   `TextDecoder` so it cannot crash the server (`src/config.ts:140-146`), but
   any label the platform accepts is allowed, and a label that disagrees with
   the one the filter was derived under can turn a path into text that no
@@ -136,9 +136,9 @@ dependency surface is the four `vscode-languageserver*` packages and
   is a random UUID and the mode is `0o600`, which leaves only the shared
   directory listing and crash leftovers. A process killed between write and
   unlink leaves the content behind; the startup sweep
-  (`sweepStaleTempFiles`, `src/compiler.ts:169-195`) removes it once it is
-  older than an hour (`src/compiler.ts:20`). The sweep matches on a fixed
-  prefix (`src/compiler.ts:10`), so it only ever deletes its own scratch
+  (`sweepStaleTempFiles`, `src/tempfile.ts:206-232`) removes it once it is
+  older than an hour (`src/tempfile.ts:24`). The sweep matches on a fixed
+  prefix (`src/tempfile.ts:8`), so it only ever deletes its own scratch
   files, but it does mean any local process can plant a decoy name to have it
   deleted.
 
@@ -166,10 +166,10 @@ dependency surface is the four `vscode-languageserver*` packages and
 Implemented:
 
 - Argument vectors instead of a shell, so config values cannot smuggle in
-  shell syntax: `src/compiler.ts:241`.
+  shell syntax: `src/compiler.ts:180`.
 - `execFile` with the configured `checkTimeoutMs` (30 s by default) and
   `maxOutputBytes` (1 MiB by default), an `AbortSignal` and `SIGKILL`:
-  `src/compiler.ts:249-262`. Both bounds are validated positive integers at
+  `src/compiler.ts:191-197`. Both bounds are validated positive integers at
   load (`src/config.ts:139-144`); a client that raises them buys a longer-lived
   child, not a new capability.
 - Runtime configuration is restricted to `includePaths` and `warnLevel`;
@@ -191,10 +191,10 @@ Implemented:
   `src/server.ts:68`, `src/task-queue.ts`.
 - `shutdown` clears the debounce timers, aborts every in-flight child, and
   waits briefly for them to unlink their temp files: `src/server.ts:204-217`.
-- Temp files are unlinked in a `finally` block: `src/server.ts:306-312`, and
-  leftovers from a killed run are removed at startup: `src/compiler.ts:265-296`.
+- Temp files are unlinked in a `finally` block: `src/server.ts:364-370`, and
+  leftovers from a killed run are removed at startup: `src/tempfile.ts:206-232`.
 - Content staged through the `TempFileStore` boundary is written with the same
-  `0o600` mode and random name: `src/tempfile.ts:52-61`.
+  `0o600` mode and random name: `src/tempfile.ts:88-97`.
 - Document extension is checked against an allowlist before any work is done:
   `src/server.ts:242-244`, against the list at `src/config.ts:13-15`.
 
@@ -232,7 +232,7 @@ reaches the compiler at all.
   `additionalFlags: ["/Fe<path>"]` at initialization and the next validation
   writes a file. The runtime path blocks this; the startup path does not.
   Setting `useWine: false` alongside a chosen `clPath` skips Wine entirely
-  (`src/compiler.ts:101-102`).
+  (`src/compiler.ts:157-158`).
 - A client that writes to the checkout can place a different `CL.EXE` under
   `VC/VC98/BIN`, because `defaultConfig` resolves the toolchain from the
   package directory (`src/config.ts:51`).
@@ -268,7 +268,7 @@ each was checked against the code:
 - Changing the configuration re-validates every open document:
   `src/server.ts:100-108`.
 - A check is killed after 30 s and output past 1 MiB is truncated:
-  `src/compiler.ts:116-117`.
+  `src/compiler.ts:114-118`.
 
 `README.md` does not list `outputEncoding` in the initialization-options table
 even though `validateConfig` accepts it and it reaches the decoder; that is a

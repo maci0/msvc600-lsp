@@ -12,6 +12,15 @@ package version, not a published artifact.
 
 ### Fixed
 
+- Scratch-source staging lives in one module again. `tempfile.ts` owns the `TempFileStore`
+  boundary and the sweep, while `compiler.ts` carried a second write path with its own copy of
+  the name prefix and no exclusive-create or size check, plus two helpers no caller used. One
+  write policy now applies to every scratch source, and the size limit is enforced by the store
+  itself rather than only by one entry point.
+- A leading BOM is stripped in one place. `compiler.ts` exported a second copy of the helper
+  that `encoding.ts` already owns, so a change to BOM handling reached only one of the two.
+- The tree compiles again. `compiler.ts` imported the `Semaphore` from a `concurrency.ts` that
+  a cleanup had deleted, so `bun run typecheck` failed before anything could be built or run.
 - `checkTimeoutMs` and `maxOutputBytes` now reach the CL.EXE invocation. Both options were
   accepted, validated, logged as part of the effective configuration, and then ignored: every
   check ran under the built-in 30 s timeout and 1 MiB output cap, so raising the timeout left a
