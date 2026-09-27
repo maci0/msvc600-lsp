@@ -15,7 +15,7 @@ import {
   MAX_SOURCE_BYTES,
   MAX_CONCURRENT_CHECKS,
 } from '../src/compiler';
-import { Msvc6Config } from '../src/config';
+import { Msvc6Config, DEFAULT_CHECK_TIMEOUT_MS, DEFAULT_MAX_OUTPUT_BYTES } from '../src/config';
 import { CL_EXE, MSVC_ROOT, describeWithToolchain } from './helpers/toolchain';
 
 const FIXTURES = path.resolve(__dirname, 'fixtures');
@@ -30,6 +30,8 @@ function testConfig(): Msvc6Config {
     wineExecutable: 'wine',
     outputEncoding: 'utf8',
     useWine: true,
+    checkTimeoutMs: DEFAULT_CHECK_TIMEOUT_MS,
+    maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
   };
 }
 

@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { syntaxCheckContent } from '../src/compiler';
-import { Msvc6Config } from '../src/config';
+import { Msvc6Config, DEFAULT_CHECK_TIMEOUT_MS, DEFAULT_MAX_OUTPUT_BYTES } from '../src/config';
 import { CL_EXE, MSVC_ROOT } from './helpers/toolchain';
 import { createSystemTempFileStore, createSimulatedTempFileStore } from '../src/tempfile';
 
@@ -17,6 +17,8 @@ function testConfig(): Msvc6Config {
     wineExecutable: 'wine',
     outputEncoding: 'utf8',
     useWine: true,
+    checkTimeoutMs: DEFAULT_CHECK_TIMEOUT_MS,
+    maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
   };
 }
 
@@ -25,7 +27,7 @@ describe('createSimulatedTempFileStore', () => {
     const run = () => {
       const store = createSimulatedTempFileStore({ dir: '/tmp/sim' });
       const first = store.write('int a;\n', '.c');
-      const second = store.write('int b;\n', '.cpp');
+      store.write('int b;\n', '.cpp');
       store.remove(first);
       return store.events;
     };

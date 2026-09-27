@@ -8,6 +8,8 @@ export interface ParsedDiagnostic {
     message: string;
     relatedInfo: string[];
 }
+/** LSP `uinteger` max value (2^31 - 1), used for "end of line" positions. */
+export declare const LSP_UINT_MAX = 2147483647;
 /**
  * Parses raw CL.EXE stdout+stderr into structured diagnostics.
  *

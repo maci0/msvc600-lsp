@@ -35,13 +35,12 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.documents = exports.connection = void 0;
-exports.getConfig = getConfig;
 exports.scheduleValidation = scheduleValidation;
 const node_1 = require("vscode-languageserver/node");
 const vscode_languageserver_textdocument_1 = require("vscode-languageserver-textdocument");
 const vscode_uri_1 = require("vscode-uri");
-const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
+const fs = __importStar(require("fs"));
 const config_1 = require("./config");
 const compiler_1 = require("./compiler");
 const diagnostics_1 = require("./diagnostics");
@@ -65,6 +64,14 @@ const validationSequencer = new validation_state_1.ValidationSequencer();
 /** Per-URI debounce timers for `onDidChangeContent`. */
 const pendingValidations = new Map();
 const DEBOUNCE_MS = 300;
+/** Drops a document's pending debounce timer, if one is still waiting. */
+function clearPendingValidation(uri) {
+    const pending = pendingValidations.get(uri);
+    if (!pending)
+        return;
+    clearTimeout(pending);
+    pendingValidations.delete(uri);
+}
 /**
  * At most this many CL.EXE children exist at once. Each check is a heavyweight
  * process (a full Wine services startup on non-Windows), so the number is kept
@@ -77,9 +84,46 @@ const MAX_CONCURRENT_CHECKS = 2;
  * previous one, so a superseded edit never reaches the compiler.
  */
 const validationQueue = new task_queue_1.TaskQueue(MAX_CONCURRENT_CHECKS);
+/** Diagnostic code used for failures of the check itself, not of the source file. */
+const TOOL_ERROR_CODE = 'msvc600-check-failed';
+/** Range covering a whole first line, where tool-failure diagnostics are anchored. */
+const DOCUMENT_START = {
+    start: { line: 0, character: 0 },
+    end: { line: 0, character: 0 },
+};
 /** Reports a caught error to the client log with control characters removed. */
 function logValidationError(context, e) {
     connection.console.error((0, logging_1.sanitizeForLog)(`${context}: ${String(e)}`));
+}
+/**
+ * Whether `e` came from the compiler run rather than from staging the scratch
+ * source. A rejection raised by `syntaxCheck` carries no errno, while the
+ * filesystem failures that abort the write do.
+ */
+function isCheckFailure(e) {
+    return !(e instanceof Error && 'code' in e);
+}
+/**
+ * Reports a failure of the syntax check as a diagnostic on the document.
+ *
+ * A check that never completed says nothing about the file, so publishing an
+ * empty diagnostic list would read as "no problems found" and silently drop
+ * whatever the user was already seeing.
+ */
+function publishCheckFailure(uri, message) {
+    connection.console.error((0, logging_1.sanitizeForLog)(`MSVC6 syntax check failed for ${uri}: ${message}`));
+    connection.sendDiagnostics({
+        uri,
+        diagnostics: [
+            {
+                range: DOCUMENT_START,
+                severity: node_1.DiagnosticSeverity.Error,
+                code: TOOL_ERROR_CODE,
+                source: 'msvc6',
+                message,
+            },
+        ],
+    });
 }
 connection.onInitialize((params) => {
     const capabilities = params.capabilities;
@@ -146,9 +190,7 @@ connection.onDidChangeConfiguration((change) => {
 });
 documents.onDidChangeContent((change) => {
     const uri = change.document.uri;
-    const existing = pendingValidations.get(uri);
-    if (existing)
-        clearTimeout(existing);
+    clearPendingValidation(uri);
     pendingValidations.set(uri, setTimeout(() => {
         pendingValidations.delete(uri);
         const doc = documents.get(uri);
@@ -158,21 +200,12 @@ documents.onDidChangeContent((change) => {
     }, DEBOUNCE_MS));
 });
 documents.onDidSave((change) => {
-    const uri = change.document.uri;
-    const pending = pendingValidations.get(uri);
-    if (pending) {
-        clearTimeout(pending);
-        pendingValidations.delete(uri);
-    }
+    clearPendingValidation(change.document.uri);
     scheduleValidation(change.document);
 });
 documents.onDidClose((event) => {
     const uri = event.document.uri;
-    const pending = pendingValidations.get(uri);
-    if (pending) {
-        clearTimeout(pending);
-        pendingValidations.delete(uri);
-    }
+    clearPendingValidation(uri);
     validationQueue.cancel(uri);
     validationSequencer.close(uri);
     connection.sendDiagnostics({ uri, diagnostics: [] });
@@ -226,11 +259,9 @@ function scheduleValidation(textDocument) {
     }
     const uri = textDocument.uri;
     const handle = validationSequencer.begin(uri);
-    const langId = config_1.CPP_EXTENSIONS.includes(ext)
-        ? 'cpp'
-        : textDocument.languageId === 'cpp'
-            ? 'cpp'
-            : 'c';
+    // A .h document carries the language id its client assigned; every other
+    // supported extension is decided by the extension itself.
+    const langId = config_1.CPP_EXTENSIONS.includes(ext) || textDocument.languageId === 'cpp' ? 'cpp' : 'c';
     const tempFile = (0, compiler_1.createTempSourcePath)(langId);
     // Content and temp path are snapshotted at submission so a queued check
     // never re-reads a document that has since changed.
@@ -258,33 +289,41 @@ async function runValidation(uri, handle, content, tempFile, signal) {
         const result = await (0, compiler_1.syntaxCheck)(config, tempFile, { signal });
         if (!handle.isCurrent())
             return;
+        if (result.timedOut) {
+            publishCheckFailure(uri, `CL.EXE did not finish within ${compiler_1.COMPILE_TIMEOUT_MS} ms and was killed; ` +
+                `diagnostics for this file are unavailable, not empty.`);
+            return;
+        }
         const parsed = (0, diagnostics_1.parseDiagnostics)(result.rawOutput);
         connection.sendDiagnostics({ uri, diagnostics: (0, diagnostics_1.toLspDiagnostics)(parsed, tempFile) });
+        if (result.truncated) {
+            connection.console.error((0, logging_1.sanitizeForLog)(`CL.EXE output for ${uri} exceeded ${compiler_1.MAX_OUTPUT_BYTES} bytes; ` +
+                'reported diagnostics are incomplete'));
+        }
     }
     catch (e) {
-        if (e instanceof compiler_1.DocumentTooLargeError) {
-            if (handle.isCurrent()) {
-                connection.sendDiagnostics({ uri, diagnostics: [tooLargeDiagnostic(e)] });
-            }
-            return;
-        }
         if (signal.aborted)
             return;
-        if (handle.isCurrent()) {
-            connection.sendDiagnostics({
-                uri,
-                diagnostics: [(0, diagnostics_1.toFailureDiagnostic)(`Syntax check failed: ${errorMessage(e)}`)],
-            });
+        if (!handle.isCurrent())
+            return;
+        if (e instanceof compiler_1.DocumentTooLargeError) {
+            connection.sendDiagnostics({ uri, diagnostics: [tooLargeDiagnostic(e)] });
+            return;
         }
+        if (isCheckFailure(e)) {
+            publishCheckFailure(uri, `Could not run the MSVC6 syntax check: ${errorMessage(e)}`);
+            return;
+        }
+        // The scratch source never reached the compiler, so the failure is local
+        // to this run and not evidence that the file is clean.
+        connection.sendDiagnostics({
+            uri,
+            diagnostics: [(0, diagnostics_1.toFailureDiagnostic)(`Syntax check failed: ${errorMessage(e)}`)],
+        });
         connection.console.error(`Validation error (${uri}): ${String(e)}`);
     }
     finally {
-        try {
-            fs.unlinkSync(tempFile);
-        }
-        catch {
-            // Temp file may already be gone or was never created.
-        }
+        (0, compiler_1.removeTempSourceFile)(tempFile);
     }
 }
 /** Tells the user why a buffer was not checked, instead of leaving it silently unvalidated. */
@@ -309,9 +348,5 @@ try {
 }
 catch (e) {
     connection.console.error(`Stale temp sweep failed: ${String(e)}`);
-}
-/** Returns the current live config — typed `Readonly` to prevent accidental mutation. */
-function getConfig() {
-    return config;
 }
 //# sourceMappingURL=server.js.map

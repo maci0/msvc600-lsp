@@ -66,6 +66,9 @@ describe('Semaphore', () => {
     expect(thirdAcquired).toBe(false);
 
     first?.();
+    await delay(1);
+    expect(secondAcquired).toBe(true);
+    expect(thirdAcquired).toBe(false);
     (await second)?.();
     await delay(1);
     expect(thirdAcquired).toBe(true);
