@@ -20,7 +20,6 @@ bun run check
 ```
 
 `check` is the whole local gate, in order: `shellcheck scripts/*.sh`, then `tsc --noEmit` over
-`check` is the whole local gate, in order: `shellcheck scripts/*.sh`, then `tsc --noEmit` over
 `src/` plus `tsc -p tsconfig.test.json` over `src/` and `tests/`, then the full test suite. Run
 `bun run check` before every push. CI (`.github/workflows/ci.yml`) runs that same gate on Linux,
 preceded by `bun install --frozen-lockfile` so a lockfile that no longer resolves fails the build

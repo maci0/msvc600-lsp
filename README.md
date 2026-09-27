@@ -69,6 +69,12 @@ stdout; a usage error writes to stderr and leaves stdout empty, so a script capt
 reads an error page as server output. Nothing else is configurable on the command line:
 configuration comes from the environment and from `initializationOptions`, described below.
 
+The transport decides who is on the other end of the protocol, and only one of them is your
+editor. `--stdio` speaks to the process that launched the server. `--node-ipc` and `--socket`
+hand the channel to another identity the launcher names, and the server authenticates neither,
+so they are only safe against a peer you control: loopback, or a socket inside a container it
+shares with you. See `docs/THREAT_MODEL.md` section 2.
+
 ### Configuration
 
 Values come from three sources. Later wins:
@@ -162,6 +168,7 @@ src/
 ├── encoding.ts          # Source preparation: BOM strip, lone surrogates, UTF-8 bytes
 ├── logging.ts           # Control-character stripping for the client log
 ├── server.ts            # LSP server lifecycle, debouncing, abort handling
+├── scheduler.ts         # Debounce boundary over the platform timer
 ├── task-queue.ts        # Bounded per-URI cancellation queue for validations
 ├── tempfile.ts          # Scratch-source boundary: staging, 0600 writes, stale-file sweep
 ├── validation-state.ts  # Per-URI generation counter deciding which result may publish
@@ -172,7 +179,7 @@ src/
 
 - **Temp files + abort controllers**: Each validation writes to a unique temp file and tracks an `AbortController`. New edits abort stale in-flight checks, and a startup sweep removes scratch files left behind by a crashed run. The file is created exclusively with mode `0600`, so a file or symlink another local user planted at that path is never written through.
 - **Validation generations**: A process-wide counter hands each validation a number that is never reused. A result is published only while its number is still the newest one for its URI, so a check that finishes late, or one belonging to a document that was closed and reopened, is discarded.
-- **Security boundary**: Runtime config changes cannot touch `additionalFlags` or the executable paths, which are fixed at initialization. That limits a notification to include paths and warning level; it does not constrain what the client sends at startup.
+- **Security boundary**: Runtime config changes cannot touch `additionalFlags` or the executable paths, which are fixed at initialization. That limits a notification to include paths and warning level; it does not constrain what the client sends at startup, and it does not constrain who the client is: over `--node-ipc` and `--socket` the peer is whatever the launcher pointed the server at.
 
 ## Supported File Types
 
