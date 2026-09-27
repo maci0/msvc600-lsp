@@ -62,9 +62,10 @@ export const describeWithToolchain = describe.skipIf(blocker !== null);
  *
  * `node` is taken from `PATH` rather than from `process.execPath`: the suite is
  * launched with Bun, and the Bun binary does not run the fixture on a Windows
- * host, so the markers the timing tests assert on are never written. A missing
- * `node` is reported rather than papered over, because the same silence would
- * return.
+ * host. The `--` separator ends node's own option parsing, because the compiler
+ * arguments `/Zs /W4 /I ...` otherwise reach node as options of its own and it
+ * exits before the script is read. A missing `node` is reported rather than
+ * papered over, because the same silence would return.
  */
 export function spyCompiler(script: string): {
   clPath: string;
@@ -73,7 +74,7 @@ export function spyCompiler(script: string): {
   if (process.platform === 'win32') {
     const node = whichPath('node');
     if (node === null) throw new Error('node is not on PATH; the fixture scripts need it');
-    return { clPath: node, additionalFlags: [script] };
+    return { clPath: node, additionalFlags: ['--', script] };
   }
   return { clPath: script, additionalFlags: [] };
 }
