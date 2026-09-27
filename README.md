@@ -65,7 +65,7 @@ Only `includePaths` and `warnLevel` can be changed at runtime via `workspace/did
 }
 ```
 
-Other fields (especially `additionalFlags`) are locked to initialization to prevent arbitrary CL.EXE flag injection. Fields that fail validation are dropped rather than rejected, so a bad value silently leaves the previous one in place. Changing the config re-validates every open document.
+Other fields (especially `additionalFlags`) cannot be changed at runtime, so a runtime notification cannot inject CL.EXE flags. They are still set freely at startup, where the client also picks `clPath` and `wineExecutable`, so anything able to speak the server's stdio channel can choose the binary that runs and the flags it receives. See `docs/THREAT_MODEL.md`. Fields that fail validation are dropped rather than rejected, so a bad value silently leaves the previous one in place. Changing the config re-validates every open document.
 
 ## Architecture
 
@@ -81,7 +81,7 @@ src/
 
 - **Temp files + abort controllers**: Each validation writes to a unique temp file and tracks an `AbortController`. New edits abort stale in-flight checks.
 - **Sequence numbers**: A per-URI counter discards results from stale validations that complete after a newer one started.
-- **Security boundary**: Runtime config changes are restricted to non-executable fields to prevent CL.EXE flag injection.
+- **Security boundary**: Runtime config changes cannot touch `additionalFlags` or the executable paths, which are fixed at initialization. That limits a notification to include paths and warning level; it does not constrain what the client sends at startup.
 
 ## Supported File Types
 
