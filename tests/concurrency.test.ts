@@ -134,4 +134,43 @@ describe('Semaphore', () => {
     release?.();
     (await second)?.();
   });
+
+  // A slot is the only thing bounding how many CL.EXE children run at once, and
+  // the compiler pipeline depends on `used` returning to zero once every caller
+  // is done. Aborts and releases racing against each other are the interleaving
+  // that would strand a slot, so they are generated rather than scripted.
+  it('never strands a slot when aborts race releases', async () => {
+    const LIMIT = 3;
+    const sem = new Semaphore(LIMIT);
+    let seed = 0x2f6e2b1;
+    const next = (): number => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed;
+    };
+
+    let held = 0;
+    let peak = 0;
+
+    const callers = Array.from({ length: 60 }, async () => {
+      const controller = new AbortController();
+      const useSignal = next() % 2 === 0;
+
+      const release = await sem.acquire(useSignal ? controller.signal : undefined);
+      if (release === null) return;
+      held++;
+      peak = Math.max(peak, held);
+      expect(held).toBeLessThanOrEqual(LIMIT);
+
+      if (next() % 3 === 0) await delay(0);
+      else if (useSignal) controller.abort();
+
+      release();
+      held--;
+    });
+
+    await Promise.all(callers);
+    expect(sem.inUse).toBe(0);
+    expect(held).toBe(0);
+    expect(peak).toBeGreaterThan(0);
+  });
 });

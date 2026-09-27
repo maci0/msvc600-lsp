@@ -76,6 +76,34 @@ describe('TaskQueue', () => {
       await flush();
       expect(started).toBe(1);
     });
+
+    it('frees the slot when a runner throws before returning a promise', async () => {
+      const queue = new TaskQueue(1);
+      const ran: string[] = [];
+
+      // A non-async runner: the throw escapes the call instead of rejecting, so
+      // it must still count as an entry that finished, or the slot it holds
+      // blocks every later task and `drained()` never settles.
+      queue.submit('boom', (() => {
+        throw new Error('threw before returning a promise');
+      }) as unknown as () => Promise<void>);
+      queue.submit('after', async () => {
+        ran.push('after');
+      });
+
+      await flush();
+      expect(ran).toEqual(['after']);
+      await expect(queue.drained()).resolves.toBeUndefined();
+    });
+
+    it('does not throw out of submit when a runner throws synchronously', () => {
+      const queue = new TaskQueue(1);
+      expect(() =>
+        queue.submit('boom', (() => {
+          throw new Error('threw before returning a promise');
+        }) as unknown as () => Promise<void>),
+      ).not.toThrow();
+    });
   });
 
   describe('superseding a key', () => {
