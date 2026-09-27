@@ -73,6 +73,15 @@ export const DEFAULT_CHECK_TIMEOUT_MS = 30_000;
 /** Cap on captured CL.EXE output. Past it the tail of the diagnostic list is lost. */
 export const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024;
 
+/**
+ * The `/I` entry for a given base and Wine mode. Under Wine the headers are
+ * read from the case-insensitive overlay in the prefix rather than from
+ * `msvcBasePath`, so the base does not enter the path.
+ */
+export function defaultIncludePaths(msvcBasePath: string, useWine: boolean): string[] {
+  return [useWine ? `${WINE_MSVC_BASE}\\include` : path.join(msvcBasePath, 'INCLUDE')];
+}
+
 /** Returns a config with sensible defaults relative to the package root. */
 export function defaultConfig(): Msvc6Config {
   const msvcBasePath = path.resolve(__dirname, '..', 'VC', 'VC98');
@@ -81,7 +90,7 @@ export function defaultConfig(): Msvc6Config {
   return {
     msvcBasePath,
     clPath: path.join(msvcBasePath, 'BIN', 'CL.EXE'),
-    includePaths: [useWine ? `${WINE_MSVC_BASE}\\include` : path.join(msvcBasePath, 'INCLUDE')],
+    includePaths: defaultIncludePaths(msvcBasePath, useWine),
     warnLevel: 4,
     additionalFlags: [],
     wineExecutable: 'wine',
@@ -188,6 +197,10 @@ export function validateConfig(raw: unknown): ConfigValidation {
 
   if (result.msvcBasePath && !result.clPath) {
     result.clPath = path.join(result.msvcBasePath, 'BIN', 'CL.EXE');
+  }
+  if (result.msvcBasePath && !result.includePaths) {
+    const useWine = result.useWine ?? process.platform !== 'win32';
+    result.includePaths = defaultIncludePaths(result.msvcBasePath, useWine);
   }
 
   return { values: result, issues };

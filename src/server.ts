@@ -32,7 +32,7 @@ import {
   DocumentTooLargeError,
   MAX_SOURCE_BYTES,
 } from './compiler';
-import { parseDiagnostics, toLspDiagnostics, LSP_UINT_MAX } from './diagnostics';
+import { parseDiagnostics, toLspDiagnostics, toFailureDiagnostic, LSP_UINT_MAX } from './diagnostics';
 import { sanitizeForLog } from './logging';
 import { ValidationSequencer, ValidationHandle } from './validation-state';
 import { TaskQueue } from './task-queue';
@@ -231,6 +231,11 @@ function getDocumentExtension(textDocument: TextDocument): string {
   return path.extname(textDocument.uri).toLowerCase();
 }
 
+/** Message text for a thrown value, without the stack. */
+function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
 /**
  * Queues a syntax check for `textDocument`, superseding any check already
  * queued or running for the same URI. The sequence number is taken here, at
@@ -300,7 +305,10 @@ async function runValidation(
     }
     if (signal.aborted) return;
     if (handle.isCurrent()) {
-      connection.sendDiagnostics({ uri, diagnostics: [] });
+      connection.sendDiagnostics({
+        uri,
+        diagnostics: [toFailureDiagnostic(`Syntax check failed: ${errorMessage(e)}`)],
+      });
     }
     connection.console.error(`Validation error (${uri}): ${String(e)}`);
   } finally {

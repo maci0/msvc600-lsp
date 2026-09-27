@@ -64,11 +64,10 @@ Pass these in your client's `initializationOptions`:
 |-------|------|---------|-------------|
 | `msvcBasePath` | `string` | `<pkg>/VC/VC98` | Root of the MSVC 6.0 installation |
 | `clPath` | `string` | `<base>/BIN/CL.EXE` | Absolute path to CL.EXE. Derived from `msvcBasePath` when omitted |
-| `includePaths` | `string[]` | `["C:\\msvc6\\include"]` under Wine, `[<base>/INCLUDE]` on Windows | Directories passed as `/I` to CL.EXE, where absolute POSIX entries are converted to Wine paths |
+| `includePaths` | `string[]` | `["C:\\msvc6\\include"]` under Wine, `[<base>/INCLUDE]` on Windows, following `msvcBasePath` when it is set | Directories passed as `/I` to CL.EXE, where absolute POSIX entries are converted to Wine paths |
 | `warnLevel` | `0-4` | `4` | Warning level (`/W0`–`/W4`) |
 | `additionalFlags` | `string[]` | `[]` | Extra flags forwarded verbatim |
 | `wineExecutable` | `string` | `"wine"` | Path to the Wine binary |
-| `outputEncoding` | `string` | `"utf8"` | Code page CL.EXE writes diagnostics in, e.g. `cp1252`; unknown labels are dropped |
 | `useWine` | `boolean` | `true` on non-Windows | Whether to invoke CL.EXE through Wine |
 | `outputEncoding` | `string` | `"utf8"` | Label `TextDecoder` uses on CL.EXE output. Use the toolchain's console code page (e.g. `cp1252`) if diagnostics come out as mojibake. An unknown label is rejected at load, since it would otherwise throw at decode time |
 | `checkTimeoutMs` | `number` | `30000` | Milliseconds before a check is killed. A hung Wine is worse than no diagnostics |
@@ -155,6 +154,8 @@ The open buffer is checked as a standalone translation unit, so a header that re
 Diagnostics are line-scoped: each one spans columns 0 to the end of the reported line, because CL.EXE gives no column numbers for these messages. A check is killed after `checkTimeoutMs` (30 s by default), and output past `maxOutputBytes` (1 MiB by default) is truncated, which drops the tail of the diagnostic list.
 
 At most four `CL.EXE` children run at once; the rest queue, so a large revalidation after a settings change cannot spawn a process per open document. Buffers above 8 MiB are not written to the temp directory at all, and the editor shows a single `msvc6-too-large` note in their place.
+
+A check that never ran, whether CL.EXE cannot be spawned or the scratch source cannot be written, publishes one error diagnostic at the top of the file saying so rather than an empty list, so a broken setup never reads as a clean file.
 
 ## Development
 

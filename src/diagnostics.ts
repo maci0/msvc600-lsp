@@ -122,6 +122,21 @@ export function toLspDiagnostics(
 }
 
 /**
+ * Diagnostic standing in for a check that never ran, whether CL.EXE could
+ * not be spawned or the scratch source could not be written. Publishing an
+ * empty list in that case would mark the document clean on the strength of
+ * no result at all.
+ */
+export function toFailureDiagnostic(message: string): Diagnostic {
+  return {
+    range: { start: Position.create(0, 0), end: Position.create(0, 0) },
+    severity: DiagnosticSeverity.Error,
+    source: 'msvc6',
+    message,
+  };
+}
+
+/**
  * Case-folds, unifies separators, and normalizes to NFC so a path spelled
  * NFD by the filesystem (macOS) still matches the NFC spelling an editor or
  * database supplies.

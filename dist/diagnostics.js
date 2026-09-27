@@ -2,10 +2,11 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.parseDiagnostics = parseDiagnostics;
 exports.toLspDiagnostics = toLspDiagnostics;
+exports.toFailureDiagnostic = toFailureDiagnostic;
 exports.normalizeForComparison = normalizeForComparison;
 exports.groupByFile = groupByFile;
 const vscode_languageserver_protocol_1 = require("vscode-languageserver-protocol");
-const config_1 = require("./config");
+const wine_path_1 = require("./wine-path");
 // MSVC output: filename(line) : (error|warning|fatal error) CODE: message
 // Greedy (.+) ensures paths with parentheses (e.g. "Program Files (x86)")
 // bind correctly — the last `(digits)` wins.
@@ -33,7 +34,7 @@ function parseDiagnostics(output) {
             }
             const [, file, lineNum, severity, code, message] = match;
             current = {
-                file: (0, config_1.fromWinePath)(file),
+                file: (0, wine_path_1.fromWinePath)(file),
                 line: parseInt(lineNum, 10),
                 severity: mapSeverity(severity),
                 code,
@@ -92,6 +93,20 @@ function toLspDiagnostics(parsed, targetFile) {
     });
 }
 /**
+ * Diagnostic standing in for a check that never ran, whether CL.EXE could
+ * not be spawned or the scratch source could not be written. Publishing an
+ * empty list in that case would mark the document clean on the strength of
+ * no result at all.
+ */
+function toFailureDiagnostic(message) {
+    return {
+        range: { start: vscode_languageserver_protocol_1.Position.create(0, 0), end: vscode_languageserver_protocol_1.Position.create(0, 0) },
+        severity: vscode_languageserver_protocol_1.DiagnosticSeverity.Error,
+        source: 'msvc6',
+        message,
+    };
+}
+/**
  * Case-folds, unifies separators, and normalizes to NFC so a path spelled
  * NFD by the filesystem (macOS) still matches the NFC spelling an editor or
  * database supplies.
@@ -102,8 +117,7 @@ function normalizeForComparison(filePath) {
 /**
  * Groups diagnostics by normalized file path for batch processing.
  *
- * **Public API** — not used internally by the LSP server, but exported for
- * programmatic consumers who need to process diagnostics per-file.
+ * Exported for the test suite; the server filters to a single file instead.
  */
 function groupByFile(diagnostics) {
     const groups = new Map();

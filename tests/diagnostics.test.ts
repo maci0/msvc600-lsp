@@ -5,6 +5,7 @@ import {
   toLspDiagnostics,
   groupByFile,
   normalizeForComparison,
+  toFailureDiagnostic,
   ParsedDiagnostic,
 } from '../src/diagnostics';
 
@@ -234,6 +235,17 @@ describe('toLspDiagnostics', () => {
     const parsed = [makeParsed({ file: '\\tmp\\test.c' })];
     const lsp = toLspDiagnostics(parsed, '/tmp/test.c');
     expect(lsp).toHaveLength(1);
+  });
+});
+
+describe('toFailureDiagnostic', () => {
+  it('marks an unchecked document as an error rather than clean', () => {
+    const d = toFailureDiagnostic('Syntax check failed: ENOENT');
+    expect(d.severity).toBe(DiagnosticSeverity.Error);
+    expect(d.source).toBe('msvc6');
+    expect(d.message).toBe('Syntax check failed: ENOENT');
+    expect(d.range.start).toEqual({ line: 0, character: 0 });
+    expect(d.range.end).toEqual({ line: 0, character: 0 });
   });
 });
 

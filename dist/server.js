@@ -44,13 +44,20 @@ const path = __importStar(require("path"));
 const config_1 = require("./config");
 const compiler_1 = require("./compiler");
 const diagnostics_1 = require("./diagnostics");
+const logging_1 = require("./logging");
 const validation_state_1 = require("./validation-state");
 const task_queue_1 = require("./task-queue");
 const connection = (0, node_1.createConnection)(node_1.ProposedFeatures.all);
 exports.connection = connection;
 const documents = new node_1.TextDocuments(vscode_languageserver_textdocument_1.TextDocument);
 exports.documents = documents;
-let config = (0, config_1.defaultConfig)();
+// Precedence: defaults < MSVC600_* environment < initializationOptions. The
+// environment layer is read here so a launch that cannot pass options still
+// configures the server; initializationOptions override it in onInitialize.
+const envConfig = (0, config_1.configFromEnv)();
+let config = (0, config_1.mergeValidated)((0, config_1.defaultConfig)(), envConfig);
+/** Rejected environment values, logged once the connection can carry messages. */
+const startupIssues = (0, config_1.formatIssues)('MSVC600_*', envConfig.issues);
 let hasConfigurationCapability = false;
 /** Decides which validation result per URI is allowed to reach the client. */
 const validationSequencer = new validation_state_1.ValidationSequencer();
@@ -69,12 +76,28 @@ const MAX_CONCURRENT_CHECKS = 2;
  * previous one, so a superseded edit never reaches the compiler.
  */
 const validationQueue = new task_queue_1.TaskQueue(MAX_CONCURRENT_CHECKS);
+/** Reports a caught error to the client log with control characters removed. */
+function logValidationError(context, e) {
+    connection.console.error((0, logging_1.sanitizeForLog)(`${context}: ${String(e)}`));
+}
 connection.onInitialize((params) => {
     const capabilities = params.capabilities;
     hasConfigurationCapability = !!(capabilities.workspace && capabilities.workspace.configuration);
-    if (params.initializationOptions) {
-        config = { ...config, ...(0, config_1.validateConfig)(params.initializationOptions) };
+    for (const line of startupIssues) {
+        connection.console.warn(line);
     }
+    if (params.initializationOptions) {
+        const validated = (0, config_1.validateConfig)(params.initializationOptions);
+        config = (0, config_1.mergeValidated)(config, validated);
+        for (const line of (0, config_1.formatIssues)('initializationOptions', validated.issues)) {
+            connection.console.warn(line);
+        }
+    }
+    connection.console.info(`effective configuration: cl=${config.useWine ? `${config.wineExecutable} ${config.clPath}` : config.clPath}, ` +
+        `includePaths=${JSON.stringify(config.includePaths)}, warnLevel=${config.warnLevel}, ` +
+        `additionalFlags=${JSON.stringify(config.additionalFlags)}, useWine=${config.useWine}, ` +
+        `outputEncoding=${config.outputEncoding}, checkTimeoutMs=${config.checkTimeoutMs}, ` +
+        `maxOutputBytes=${config.maxOutputBytes}`);
     return {
         capabilities: {
             textDocumentSync: {
@@ -87,26 +110,32 @@ connection.onInitialize((params) => {
 });
 connection.onInitialized(() => {
     if (hasConfigurationCapability) {
-        void connection.client.register(node_1.DidChangeConfigurationNotification.type, undefined).then(undefined, (e) => connection.console.error(`Failed to register config change watcher: ${String(e)}`));
+        void connection.client.register(node_1.DidChangeConfigurationNotification.type, undefined).then(undefined, (e) => logValidationError('Failed to register config change watcher', e));
     }
 });
 connection.onDidChangeConfiguration((change) => {
     if (!change.settings?.msvc6)
         return;
     const validated = (0, config_1.validateConfig)(change.settings.msvc6);
+    for (const line of (0, config_1.formatIssues)('didChangeConfiguration', validated.issues)) {
+        connection.console.warn(line);
+    }
     // Runtime config changes are untrusted — only accept non-executable fields.
     // Notably, additionalFlags is excluded: arbitrary CL.EXE flags could write files
     // or alter behavior beyond syntax checking. Set additionalFlags via initializationOptions only.
     const previous = config;
     config = {
         ...config,
-        ...(validated.includePaths ? { includePaths: validated.includePaths } : {}),
-        ...(validated.warnLevel !== undefined ? { warnLevel: validated.warnLevel } : {}),
+        ...(validated.values.includePaths ? { includePaths: validated.values.includePaths } : {}),
+        ...(validated.values.warnLevel !== undefined ? { warnLevel: validated.values.warnLevel } : {}),
     };
     // A client may re-send the settings it already holds. Re-checking every open
     // document would spawn one CL.EXE per document for no change in the inputs.
     if ((0, config_1.runtimeConfigEquals)(previous, config))
         return;
+    // A client that repoints includePaths controls which headers every open
+    // file is preprocessed against, so the change is recorded.
+    connection.console.info((0, logging_1.sanitizeForLog)(`msvc6 configuration changed: includePaths=${JSON.stringify(config.includePaths)}, warnLevel=${config.warnLevel}`));
     for (const t of pendingValidations.values())
         clearTimeout(t);
     pendingValidations.clear();
@@ -179,6 +208,10 @@ function getDocumentExtension(textDocument) {
     }
     return path.extname(textDocument.uri).toLowerCase();
 }
+/** Message text for a thrown value, without the stack. */
+function errorMessage(e) {
+    return e instanceof Error ? e.message : String(e);
+}
 /**
  * Queues a syntax check for `textDocument`, superseding any check already
  * queued or running for the same URI. The sequence number is taken here, at
@@ -204,25 +237,43 @@ function scheduleValidation(textDocument) {
     validationQueue.submit(uri, (signal) => runValidation(uri, handle, content, tempFile, signal));
 }
 async function runValidation(uri, handle, content, tempFile, signal) {
-    if (signal.aborted)
-        return;
     try {
-        fs.writeFileSync(tempFile, (0, compiler_1.stripByteOrderMark)(content), {
+        // A newer edit aborted this one while it sat in the queue.
+        if (signal.aborted)
+            return;
+        const body = (0, compiler_1.stripByteOrderMark)(content);
+        const byteLength = Buffer.byteLength(body, 'utf-8');
+        if (byteLength > compiler_1.MAX_SOURCE_BYTES) {
+            throw new compiler_1.DocumentTooLargeError(byteLength);
+        }
+        // The create is exclusive (`wx`): a path already taken in the shared temp
+        // directory is an error rather than something to truncate, so a file or
+        // symlink planted by another local user is never written through.
+        fs.writeFileSync(tempFile, body, {
             encoding: 'utf-8',
             mode: 0o600,
+            flag: 'wx',
         });
         const result = await (0, compiler_1.syntaxCheck)(config, tempFile, { signal });
         if (!handle.isCurrent())
             return;
         const parsed = (0, diagnostics_1.parseDiagnostics)(result.rawOutput);
-        const diagnostics = (0, diagnostics_1.toLspDiagnostics)(parsed, tempFile);
-        connection.sendDiagnostics({ uri, diagnostics });
+        connection.sendDiagnostics({ uri, diagnostics: (0, diagnostics_1.toLspDiagnostics)(parsed, tempFile) });
     }
     catch (e) {
+        if (e instanceof compiler_1.DocumentTooLargeError) {
+            if (handle.isCurrent()) {
+                connection.sendDiagnostics({ uri, diagnostics: [tooLargeDiagnostic(e)] });
+            }
+            return;
+        }
         if (signal.aborted)
             return;
         if (handle.isCurrent()) {
-            connection.sendDiagnostics({ uri, diagnostics: [] });
+            connection.sendDiagnostics({
+                uri,
+                diagnostics: [(0, diagnostics_1.toFailureDiagnostic)(`Syntax check failed: ${errorMessage(e)}`)],
+            });
         }
         connection.console.error(`Validation error (${uri}): ${String(e)}`);
     }
@@ -234,6 +285,19 @@ async function runValidation(uri, handle, content, tempFile, signal) {
             // Temp file may already be gone or was never created.
         }
     }
+}
+/** Tells the user why a buffer was not checked, instead of leaving it silently unvalidated. */
+function tooLargeDiagnostic(error) {
+    return {
+        range: {
+            start: { line: 0, character: 0 },
+            end: { line: 0, character: diagnostics_1.LSP_UINT_MAX },
+        },
+        severity: node_1.DiagnosticSeverity.Information,
+        code: 'msvc6-too-large',
+        source: 'msvc6',
+        message: `Not syntax-checked: ${error.message}`,
+    };
 }
 documents.listen(connection);
 connection.listen();

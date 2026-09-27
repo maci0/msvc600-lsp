@@ -202,6 +202,25 @@ describe('validateConfig', () => {
     expect(result.clPath).toContain('CL.EXE');
   });
 
+  it('auto-derives includePaths from msvcBasePath without Wine', () => {
+    const result = validateConfig({ msvcBasePath: '/opt/msvc', useWine: false });
+    expect(result.includePaths).toEqual(['/opt/msvc/INCLUDE']);
+  });
+
+  it('points includePaths at the Wine overlay, not the base, when Wine is in use', () => {
+    const result = validateConfig({ msvcBasePath: '/opt/msvc', useWine: true });
+    expect(result.includePaths).toEqual(['C:\\msvc6\\include']);
+  });
+
+  it('leaves an explicit includePaths alone when msvcBasePath is also provided', () => {
+    const result = validateConfig({
+      msvcBasePath: '/opt/msvc',
+      useWine: false,
+      includePaths: ['/somewhere/else'],
+    });
+    expect(result.includePaths).toEqual(['/somewhere/else']);
+  });
+
   it('does not override explicit clPath when msvcBasePath is also provided', () => {
     const result = validateValues({ msvcBasePath: '/opt/msvc', clPath: '/custom/CL.EXE' });
     expect(result.clPath).toBe('/custom/CL.EXE');

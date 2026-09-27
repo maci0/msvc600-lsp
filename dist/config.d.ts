@@ -39,6 +39,12 @@ export interface Msvc6Config {
 }
 /** CL.EXE diagnostics are ASCII-safe under Wine's UTF-8 console by default. */
 export declare const DEFAULT_OUTPUT_ENCODING = "utf8";
+/**
+ * The `/I` entry for a given base and Wine mode. Under Wine the headers are
+ * read from the case-insensitive overlay in the prefix rather than from
+ * `msvcBasePath`, so the base does not enter the path.
+ */
+export declare function defaultIncludePaths(msvcBasePath: string, useWine: boolean): string[];
 /** Returns a config with sensible defaults relative to the package root. */
 export declare function defaultConfig(): Msvc6Config;
 /**
