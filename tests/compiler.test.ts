@@ -464,6 +464,11 @@ describe('syntaxCheck output limits', () => {
     // the end marker. A killed child is reported as a non-zero exit code rather
     // than a rejection.
     const patient = await runWithTimeout(DEFAULT_CHECK_TIMEOUT_MS);
+    console.log(
+      `DIAG platform=${process.platform} exec=${process.execPath} cfg=${JSON.stringify(
+        spyCompiler(path.join(FIXTURES, 'slow_compiler.mjs')),
+      )} tmp=${os.tmpdir()} markers=${JSON.stringify(patient.markers)} exit=${patient.exitCode}`,
+    );
     expect(patient.markers.map((m) => m.split(' ')[0])).toEqual(['start', 'end']);
     expect(patient.exitCode).toBe(0);
 
