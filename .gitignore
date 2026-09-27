@@ -1,0 +1,13 @@
+node_modules/
+dist/
+coverage/
+
+# MSVC 6.0 installation supplied locally; licensed binaries must stay out of the repo.
+VC/
+
+.env
+.env.*
+!.env.example
+
+*.tsbuildinfo
+.DS_Store

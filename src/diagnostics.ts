@@ -1,0 +1,143 @@
+import {
+  type Diagnostic,
+  DiagnosticSeverity,
+  Position,
+  type Range,
+} from 'vscode-languageserver-protocol';
+import { fromWinePath } from './config';
+
+/** A diagnostic parsed from raw CL.EXE text output. */
+export interface ParsedDiagnostic {
+  file: string;
+  line: number;
+  severity: DiagnosticSeverity;
+  code: string;
+  message: string;
+  relatedInfo: string[];
+}
+
+/** The three severity keywords CL.EXE emits. */
+type MsvcSeverity = 'error' | 'warning' | 'fatal error';
+
+// MSVC output: filename(line) : (error|warning|fatal error) CODE: message
+// Greedy (.+) ensures paths with parentheses (e.g. "Program Files (x86)")
+// bind correctly — the last `(digits)` wins.
+// Code prefix is [A-Za-z]+\d+ to match C####, D####, and future prefixes.
+const DIAG_REGEX = /^(.+)\((\d+)\)\s*:\s*(error|warning|fatal error)\s+([A-Za-z]+\d+)\s*:\s*(.+)$/;
+
+// CL.EXE typically indents continuation/context lines; accept 8+ spaces or tabs.
+const CONTINUATION_INDENT = /^(?: {8,}|\t)/;
+
+/** LSP `uinteger` max value (2^31 - 1), used for "end of line" positions. */
+const LSP_UINT_MAX = 2147483647;
+
+/**
+ * Parses raw CL.EXE stdout+stderr into structured diagnostics.
+ *
+ * Handles multi-line diagnostics where continuation lines (indented 8 spaces)
+ * are attached as `relatedInfo` to the preceding diagnostic.
+ */
+export function parseDiagnostics(output: string): ParsedDiagnostic[] {
+  const lines = output.split(/\r?\n/);
+  const diagnostics: ParsedDiagnostic[] = [];
+  let current: ParsedDiagnostic | null = null;
+
+  for (const line of lines) {
+    const match = DIAG_REGEX.exec(line);
+    if (match) {
+      if (current) {
+        diagnostics.push(current);
+      }
+      const [, file, lineNum, severity, code, message] = match;
+      current = {
+        file: fromWinePath(file),
+        line: parseInt(lineNum, 10),
+        severity: mapSeverity(severity as MsvcSeverity),
+        code,
+        message,
+        relatedInfo: [],
+      };
+    } else if (current && CONTINUATION_INDENT.test(line)) {
+      current.relatedInfo.push(line.trim());
+    } else if (line.trim() === '') {
+      if (current) {
+        diagnostics.push(current);
+        current = null;
+      }
+    }
+  }
+
+  if (current) {
+    diagnostics.push(current);
+  }
+
+  return diagnostics;
+}
+
+function mapSeverity(severity: MsvcSeverity): DiagnosticSeverity {
+  switch (severity) {
+    case 'error':
+    case 'fatal error':
+      return DiagnosticSeverity.Error;
+    case 'warning':
+      return DiagnosticSeverity.Warning;
+  }
+}
+
+/**
+ * Converts parsed diagnostics into LSP `Diagnostic` objects, filtering
+ * to only those belonging to `targetFile` (case-insensitive, slash-normalized).
+ */
+export function toLspDiagnostics(parsed: ParsedDiagnostic[], targetFile: string): Diagnostic[] {
+  return parsed
+    .filter((d) => normalizeForComparison(d.file) === normalizeForComparison(targetFile))
+    .map((d) => {
+      const line = Math.min(LSP_UINT_MAX, Math.max(0, d.line - 1));
+      const range: Range = {
+        start: Position.create(line, 0),
+        end: Position.create(line, LSP_UINT_MAX),
+      };
+
+      let message = d.message;
+      if (d.relatedInfo.length > 0) {
+        message += `\n${d.relatedInfo.join('\n')}`;
+      }
+
+      return {
+        range,
+        severity: d.severity,
+        code: d.code,
+        source: 'msvc6',
+        message,
+      };
+    });
+}
+
+/**
+ * Case-folds, unifies separators, and normalizes to NFC so a path spelled
+ * NFD by the filesystem (macOS) still matches the NFC spelling an editor or
+ * database supplies.
+ */
+export function normalizeForComparison(filePath: string): string {
+  return filePath.normalize('NFC').toLowerCase().replace(/\\/g, '/');
+}
+
+/**
+ * Groups diagnostics by normalized file path for batch processing.
+ *
+ * **Public API** — not used internally by the LSP server, but exported for
+ * programmatic consumers who need to process diagnostics per-file.
+ */
+export function groupByFile(diagnostics: ParsedDiagnostic[]): Map<string, ParsedDiagnostic[]> {
+  const groups = new Map<string, ParsedDiagnostic[]>();
+  for (const d of diagnostics) {
+    const key = normalizeForComparison(d.file);
+    const existing = groups.get(key);
+    if (existing) {
+      existing.push(d);
+    } else {
+      groups.set(key, [d]);
+    }
+  }
+  return groups;
+}

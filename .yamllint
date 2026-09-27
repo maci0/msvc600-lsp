@@ -1,0 +1,9 @@
+extends: default
+
+rules:
+  line-length:
+    max: 120
+  # GitHub Actions files carry no document start marker.
+  document-start: disable
+  truthy:
+    allowed-values: ['true', 'false', 'on']

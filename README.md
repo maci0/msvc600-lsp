@@ -88,6 +88,21 @@ bun run watch         # Watch + compile
 bun run setup         # Configure Wine include paths
 ```
 
+### Static analysis
+
+```bash
+bun run lint          # Biome: lint + format check
+bun run lint:fix      # Biome: apply safe and unsafe fixes
+bun run typecheck     # tsc over src/, tests/ and vitest.config.ts
+bun run lint:shell    # shellcheck over scripts/
+yamllint .            # Workflow and config YAML
+bun run check         # All of the above
+```
+
+CI runs every one of these plus the test suite; a failure in any of them fails
+the build. Type checking covers the test sources as well as `src/`, so a test
+that drifts from the public types fails before it can mislead.
+
 ## License
 
 See project root for license information.
