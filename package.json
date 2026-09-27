@@ -5,7 +5,8 @@
   "license": "UNLICENSED",
   "main": "dist/server.js",
   "files": [
-    "dist"
+    "dist",
+    "src"
   ],
   "packageManager": "bun@1.4.0",
   "bin": {
@@ -19,6 +20,7 @@
     "test:watch": "vitest",
     "test:unit": "vitest run --exclude 'tests/{compiler,server}.test.ts'",
     "lint": "shellcheck scripts/*.sh",
+    "verify:repro": "bash scripts/check-reproducible.sh",
     "check": "bun run lint && bun run typecheck && bun run build && bun run test",
     "ci": "bun install --frozen-lockfile && bun run check",
     "doctor": "bash scripts/doctor.sh",

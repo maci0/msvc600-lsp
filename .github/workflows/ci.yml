@@ -43,3 +43,5 @@ jobs:
       - name: Lint, typecheck, test
         # The MSVC6 integration tests skip themselves when VC/VC98 is absent.
         run: bun run check
+      - name: Verify the build is reproducible
+        run: bun run verify:repro

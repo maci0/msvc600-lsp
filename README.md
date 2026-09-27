@@ -218,7 +218,8 @@ bun run test:unit     # Fast loop: every test file that needs no Wine, MSVC 6.0 
 bun run test:watch    # Watch mode
 bun run watch         # Watch + compile
 bun run check         # The pre-push gate: shellcheck, typecheck, build, then the full test suite (needs a POSIX shell)
-bun run ci            # What CI runs: frozen-lockfile install, then check
+bun run verify:repro  # Build twice under different locale and timezone, diff the output (POSIX shell)
+bun run ci            # What CI runs: frozen-lockfile install, then check; CI also runs verify:repro
 ```
 
 `bun run check` is what `CONTRIBUTING.md` asks you to run before every push. For running a
