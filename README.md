@@ -39,6 +39,23 @@ bun run start
 
 Configure your editor's LSP client to launch `bun dist/server.js --stdio`.
 
+### Configuration
+
+Values come from three sources. Later wins:
+
+1. Built-in defaults (below)
+2. `MSVC600_*` environment variables
+3. The client's `initializationOptions`
+
+Two fields, `includePaths` and `warnLevel`, can also be changed while the server runs; see
+Runtime Configuration.
+
+A value that fails validation is dropped and reported on the server's log channel
+(`window/logMessage` in VS Code, the LSP client's log) naming the field and the reason, so a
+misspelled key or a value of the wrong type is visible instead of leaving a default in place
+unexplained. The effective configuration is logged once on `initialize`. Nothing in this
+configuration is secret, so the log is not redacted.
+
 ### Initialization Options
 
 Pass these in your client's `initializationOptions`:
@@ -46,12 +63,45 @@ Pass these in your client's `initializationOptions`:
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `msvcBasePath` | `string` | `<pkg>/VC/VC98` | Root of the MSVC 6.0 installation |
-| `clPath` | `string` | `<base>/BIN/CL.EXE` | Absolute path to CL.EXE |
+| `clPath` | `string` | `<base>/BIN/CL.EXE` | Absolute path to CL.EXE. Derived from `msvcBasePath` when omitted |
 | `includePaths` | `string[]` | `["C:\\msvc6\\include"]` under Wine, `[<base>/INCLUDE]` on Windows | Directories passed as `/I` to CL.EXE, where absolute POSIX entries are converted to Wine paths |
 | `warnLevel` | `0-4` | `4` | Warning level (`/W0`–`/W4`) |
 | `additionalFlags` | `string[]` | `[]` | Extra flags forwarded verbatim |
 | `wineExecutable` | `string` | `"wine"` | Path to the Wine binary |
 | `useWine` | `boolean` | `true` on non-Windows | Whether to invoke CL.EXE through Wine |
+| `outputEncoding` | `string` | `"utf8"` | Label `TextDecoder` uses on CL.EXE output. Use the toolchain's console code page (e.g. `cp1252`) if diagnostics come out as mojibake. An unknown label is rejected at load, since it would otherwise throw at decode time |
+| `checkTimeoutMs` | `number` | `30000` | Milliseconds before a check is killed. A hung Wine is worse than no diagnostics |
+| `maxOutputBytes` | `number` | `1048576` | Cap on captured CL.EXE output. Past it the tail of the diagnostic list is lost |
+
+`outputEncoding` defaults to `utf8` because Wine's UTF-8 console already passes ASCII-safe
+CL.EXE output through unchanged. Switch it if diagnostics carry characters above U+007F.
+
+### Environment Variables
+
+Every option above has an environment variable, so a launch that cannot pass
+`initializationOptions` (a remote session, a container, an editor that only sets an environment)
+configures the same way:
+
+| Variable | Value |
+|----------|-------|
+| `MSVC600_MSVC_BASE_PATH` | path |
+| `MSVC600_CL_PATH` | path |
+| `MSVC600_INCLUDE_PATHS` | `;`-separated list (a semicolon, because the entries carry Windows drive letters) |
+| `MSVC600_WARN_LEVEL` | `0`-`4` |
+| `MSVC600_ADDITIONAL_FLAGS` | `;`-separated list |
+| `MSVC600_WINE_EXECUTABLE` | path |
+| `MSVC600_USE_WINE` | `true`, `false`, `1`, `0` |
+| `MSVC600_OUTPUT_ENCODING` | `TextDecoder` label |
+| `MSVC600_CHECK_TIMEOUT_MS` | positive integer |
+| `MSVC600_MAX_OUTPUT_BYTES` | positive integer |
+
+```bash
+MSVC600_WARN_LEVEL=2 MSVC600_INCLUDE_PATHS='C:\msvc6\include;/opt/msvc/INCLUDE' bun dist/server.js --stdio
+```
+
+A variable that is left unset is not applied. A variable set to an empty string is rejected and
+logged, because "no include paths" and "no include paths configured" are different setups and
+only one of them is what was meant.
 
 ### Runtime Configuration
 
@@ -66,7 +116,7 @@ Only `includePaths` and `warnLevel` can be changed at runtime via `workspace/did
 }
 ```
 
-Other fields (especially `additionalFlags`) cannot be changed at runtime, so a runtime notification cannot inject CL.EXE flags. They are still set freely at startup, where the client also picks `clPath` and `wineExecutable`, so anything able to speak the server's stdio channel can choose the binary that runs and the flags it receives. See `docs/THREAT_MODEL.md`. Fields that fail validation are dropped rather than rejected, so a bad value silently leaves the previous one in place. Changing the config re-validates every open document.
+Other fields (especially `additionalFlags`) cannot be changed at runtime, so a runtime notification cannot inject CL.EXE flags. They are still set freely at startup, where the client also picks `clPath` and `wineExecutable`, so anything able to speak the server's stdio channel can choose the binary that runs and the flags it receives. See `docs/THREAT_MODEL.md`. Rejected fields are dropped and logged, so a bad value leaves the previous one in place with a reason attached. Changing the config re-validates every open document.
 
 ## Architecture
 
@@ -101,7 +151,7 @@ src/
 
 The open buffer is checked as a standalone translation unit, so a header that relies on types or include guards supplied by a `.c` file reports errors a real build would not.
 
-Diagnostics are line-scoped: each one spans columns 0 to the end of the reported line, because CL.EXE gives no column numbers for these messages. A check is killed after 30 s, and output past 1 MiB is truncated, which drops the tail of the diagnostic list.
+Diagnostics are line-scoped: each one spans columns 0 to the end of the reported line, because CL.EXE gives no column numbers for these messages. A check is killed after `checkTimeoutMs` (30 s by default), and output past `maxOutputBytes` (1 MiB by default) is truncated, which drops the tail of the diagnostic list.
 
 At most four `CL.EXE` children run at once; the rest queue, so a large revalidation after a settings change cannot spawn a process per open document. Buffers above 8 MiB are not written to the temp directory at all, and the editor shows a single `msvc6-too-large` note in their place.
 

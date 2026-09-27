@@ -16,6 +16,9 @@ import * as path from 'path';
 import {
   Msvc6Config,
   defaultConfig,
+  configFromEnv,
+  formatIssues,
+  mergeValidated,
   validateConfig,
   runtimeConfigEquals,
   ALL_EXTENSIONS,
@@ -37,7 +40,15 @@ import { TaskQueue } from './task-queue';
 const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
 
-let config: Msvc6Config = defaultConfig();
+// Precedence: defaults < MSVC600_* environment < initializationOptions. The
+// environment layer is read here so a launch that cannot pass options still
+// configures the server; initializationOptions override it in onInitialize.
+const envConfig = configFromEnv();
+let config: Msvc6Config = mergeValidated(defaultConfig(), envConfig);
+
+/** Rejected environment values, logged once the connection can carry messages. */
+const startupIssues = formatIssues('MSVC600_*', envConfig.issues);
+
 let hasConfigurationCapability = false;
 
 /** Decides which validation result per URI is allowed to reach the client. */
@@ -73,9 +84,25 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
     capabilities.workspace && capabilities.workspace.configuration
   );
 
-  if (params.initializationOptions) {
-    config = { ...config, ...validateConfig(params.initializationOptions) };
+  for (const line of startupIssues) {
+    connection.console.warn(line);
   }
+
+  if (params.initializationOptions) {
+    const validated = validateConfig(params.initializationOptions);
+    config = mergeValidated(config, validated);
+    for (const line of formatIssues('initializationOptions', validated.issues)) {
+      connection.console.warn(line);
+    }
+  }
+
+  connection.console.info(
+    `effective configuration: cl=${config.useWine ? `${config.wineExecutable} ${config.clPath}` : config.clPath}, ` +
+      `includePaths=${JSON.stringify(config.includePaths)}, warnLevel=${config.warnLevel}, ` +
+      `additionalFlags=${JSON.stringify(config.additionalFlags)}, useWine=${config.useWine}, ` +
+      `outputEncoding=${config.outputEncoding}, checkTimeoutMs=${config.checkTimeoutMs}, ` +
+      `maxOutputBytes=${config.maxOutputBytes}`,
+  );
 
   return {
     capabilities: {
@@ -101,6 +128,9 @@ connection.onDidChangeConfiguration((change) => {
   if (!change.settings?.msvc6) return;
 
   const validated = validateConfig(change.settings.msvc6);
+  for (const line of formatIssues('didChangeConfiguration', validated.issues)) {
+    connection.console.warn(line);
+  }
 
   // Runtime config changes are untrusted — only accept non-executable fields.
   // Notably, additionalFlags is excluded: arbitrary CL.EXE flags could write files
@@ -108,8 +138,8 @@ connection.onDidChangeConfiguration((change) => {
   const previous = config;
   config = {
     ...config,
-    ...(validated.includePaths ? { includePaths: validated.includePaths } : {}),
-    ...(validated.warnLevel !== undefined ? { warnLevel: validated.warnLevel } : {}),
+    ...(validated.values.includePaths ? { includePaths: validated.values.includePaths } : {}),
+    ...(validated.values.warnLevel !== undefined ? { warnLevel: validated.values.warnLevel } : {}),
   };
 
   // A client may re-send the settings it already holds. Re-checking every open
@@ -120,7 +150,7 @@ connection.onDidChangeConfiguration((change) => {
   // file is preprocessed against, so the change is recorded.
   connection.console.info(
     sanitizeForLog(
-      `msvc6 configuration changed: includePaths=${config.includePaths.length} warnLevel=${config.warnLevel}`,
+      `msvc6 configuration changed: includePaths=${JSON.stringify(config.includePaths)}, warnLevel=${config.warnLevel}`,
     ),
   );
 
