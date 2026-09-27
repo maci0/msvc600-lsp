@@ -4,6 +4,7 @@ import {
   parseDiagnostics,
   toLspDiagnostics,
   ParsedDiagnostic,
+  LSP_UINT_MAX,
 } from '../src/diagnostics';
 
 describe('parseDiagnostics', () => {
@@ -150,6 +151,15 @@ describe('parseDiagnostics', () => {
     expect(result).toHaveLength(1);
     expect(result[0].code).toBe('C2146');
     expect(result[0].relatedInfo).toHaveLength(0);
+  });
+
+  it('pins a line number too long for a double to the last addressable line', () => {
+    const output = `Z:/tmp/test.c(${'9'.repeat(400)}) : error C2146: syntax error`;
+    const result = parseDiagnostics(output);
+    expect(result).toHaveLength(1);
+    expect(result[0].line).toBe(LSP_UINT_MAX);
+    const lsp = toLspDiagnostics(result, '/tmp/test.c');
+    expect(lsp[0].range.start.line).toBe(LSP_UINT_MAX - 1);
   });
 });
 

@@ -43,6 +43,12 @@ test run.
   `CL.EXE` through Wine and skip themselves when Wine or `VC/VC98` is absent. Put pure logic
   tests in the unit files, outside `describeWithToolchain`, so they stay runnable everywhere.
 - `tests/fixtures/` holds the `.c` and `.cpp` inputs the compiler suite checks.
+- `tests/fuzz-diagnostics.test.ts` and `tests/fuzz-config.test.ts` fuzz the two parsers that
+  take untrusted text: CL.EXE output and the client's `initializationOptions`. Each starts from a
+  corpus of real captures in the file and derives its cases with the seeded generator in
+  `tests/helpers/fuzz.ts`, so a run is reproducible. Every case asserts an invariant rather than
+  merely surviving, and a failure prints the input, which is the regression test to add. A parser
+  of untrusted input needs one of these before it needs another example-based test.
 
 Run one file or one test:
 
