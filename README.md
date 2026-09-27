@@ -60,13 +60,14 @@ src/
 ├── config.ts       # Configuration types, validation, Wine path conversion
 ├── compiler.ts     # CL.EXE invocation (syntax-check mode)
 ├── diagnostics.ts  # MSVC output parser → LSP Diagnostic conversion
+├── validationTracker.ts # Per-URI staleness tokens and abort controllers
 └── server.ts       # LSP server lifecycle, debouncing, abort handling
 ```
 
 **Key design decisions:**
 
 - **Temp files + abort controllers**: Each validation writes to a unique temp file and tracks an `AbortController`. New edits abort stale in-flight checks.
-- **Sequence numbers**: A per-URI counter discards results from stale validations that complete after a newer one started.
+- **Non-reusable staleness tokens**: One monotonic counter issues every validation a token that is never handed out twice, so a run left over from a previous edit or a closed document can never pass the staleness check and publish over newer diagnostics.
 - **Security boundary**: Runtime config changes are restricted to non-executable fields to prevent CL.EXE flag injection.
 
 ## Supported File Types
