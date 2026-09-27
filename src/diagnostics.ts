@@ -33,6 +33,17 @@ const CONTINUATION_INDENT = /^(?: {8,}|\t)/;
 const LSP_UINT_MAX = 2147483647;
 
 /**
+ * Coerces any number into the LSP `uinteger` range. `NaN` and `-Infinity`
+ * collapse to 0, `+Infinity` to the ceiling: a `ParsedDiagnostic` built by a
+ * programmatic consumer carries whatever number it likes, and a non-integer
+ * position serializes as `null` and is rejected by the client.
+ */
+function toUinteger(value: number): number {
+  if (!Number.isFinite(value)) return value > 0 ? LSP_UINT_MAX : 0;
+  return Math.min(LSP_UINT_MAX, Math.max(0, Math.floor(value)));
+}
+
+/**
  * Parses raw CL.EXE stdout+stderr into structured diagnostics.
  *
  * Handles multi-line diagnostics where continuation lines (indented 8 spaces)
@@ -96,7 +107,7 @@ export function toLspDiagnostics(
   return parsed
     .filter((d) => normalizeForComparison(d.file) === normalizeForComparison(targetFile))
     .map((d) => {
-      const line = Math.min(LSP_UINT_MAX, Math.max(0, d.line - 1));
+      const line = toUinteger(d.line - 1);
       const range: Range = {
         start: Position.create(line, 0),
         end: Position.create(line, LSP_UINT_MAX),

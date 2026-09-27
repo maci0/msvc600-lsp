@@ -30,6 +30,22 @@ repository has no CI pipeline yet, so this is the only gate; run it before every
   skip themselves when Wine or `VC/VC98` is absent. Put pure logic tests in the unit files so
   they stay runnable everywhere; a test that needs CL.EXE belongs behind `describeWithToolchain`.
 - `tests/fixtures/` holds the `.c` and `.cpp` inputs the compiler suite checks.
+- `tests/fuzz.diagnostics.test.ts` and `tests/fuzz.config.test.ts` fuzz the two untrusted
+  input surfaces: CL.EXE output text and the client's config payloads. They run in
+  `bun run test` and need no toolchain. `tests/helpers/fuzz.ts` is the seeded PRNG, the
+  mutation operators, and the per-case wall-clock budget they share.
+
+The fuzz harnesses are deterministic: a fixed seed drives a fixed iteration count, so a
+failure reproduces from the seed and input the failure message prints. Each harness
+encodes invariants as assertions rather than relying on the fuzzer to find a crash: a
+fuzzer proves bugs exist, an assertion turns a wrong answer into a visible failure.
+`budgetMs` is a ReDoS guard, so a regex change that backtracks on adversarial input fails
+the case instead of hanging the suite.
+
+When you add a parser over input this project does not control, give it a seed corpus of
+the real shapes it sees, not placeholder strings, and add the fuzz file next to its unit
+test.
+
 
 Run one file or one test:
 
