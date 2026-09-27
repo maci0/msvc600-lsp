@@ -11,7 +11,7 @@ The server intercepts `textDocument/didOpen`, `textDocument/didChange`, and `tex
 3. Parses MSVC's diagnostic output into LSP `Diagnostic` objects
 4. Publishes them back to the editor
 
-Debouncing (300 ms) and abort-on-stale ensure only the latest edit triggers a check.
+Debouncing (300 ms by default, `debounceMs`) and abort-on-stale ensure only the latest edit triggers a check.
 
 ## Prerequisites
 
@@ -35,29 +35,54 @@ bun run start
 
 Configure your editor's LSP client to launch `bun dist/server.js --stdio`.
 
-### Initialization Options
+### Configuration
 
-Pass these in your client's `initializationOptions`:
+Settings come from three layers. Precedence, lowest to highest:
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `msvcBasePath` | `string` | `<pkg>/VC/VC98` | Root of the MSVC 6.0 installation |
-| `clPath` | `string` | `<base>/BIN/CL.EXE` | Absolute path to CL.EXE |
-| `includePaths` | `string[]` | `["C:\\msvc6\\include"]` | Directories passed as `/I` to CL.EXE |
-| `warnLevel` | `0-4` | `4` | Warning level (`/W0`–`/W4`) |
-| `additionalFlags` | `string[]` | `[]` | Extra flags forwarded verbatim |
-| `wineExecutable` | `string` | `"wine"` | Path to the Wine binary |
-| `useWine` | `boolean` | `true` on non-Windows | Whether to invoke CL.EXE through Wine |
+1. built-in defaults
+2. `MSVC6_*` environment variables
+3. client `initializationOptions`
+
+Every layer is validated at startup. A value that fails validation (wrong type,
+out of range, misspelled key or variable) is reported in the client's output
+log and the lower-precedence value is kept, so a typo never silently changes
+behavior. The resolved config is logged on `initialize` and on every runtime
+config change.
+
+| Field | Env var | Type | Default | Description |
+|-------|---------|------|---------|-------------|
+| `msvcBasePath` | `MSVC6_BASE_PATH` | `string` | `<pkg>/VC/VC98` | Root of the MSVC 6.0 installation |
+| `clPath` | `MSVC6_CL_PATH` | `string` | `<base>/BIN/CL.EXE` | Absolute path to CL.EXE |
+| `includePaths` | `MSVC6_INCLUDE_PATHS` | `string[]` | `["C:\\msvc6\\include"]` | Directories passed as `/I` to CL.EXE, separated by `:` (`;` on Windows) |
+| `warnLevel` | `MSVC6_WARN_LEVEL` | `0-4` | `4` | Warning level (`/W0`–`/W4`) |
+| `additionalFlags` | `MSVC6_ADDITIONAL_FLAGS` | `string[]` | `[]` | Extra flags forwarded verbatim, whitespace separated |
+| `wineExecutable` | `MSVC6_WINE_EXECUTABLE` | `string` | `"wine"` | Path to the Wine binary |
+| `useWine` | `MSVC6_USE_WINE` | `boolean` | `true` on non-Windows | Whether to invoke CL.EXE through Wine |
+| `compileTimeoutMs` | `MSVC6_COMPILE_TIMEOUT_MS` | `number` | `30000` | Wall-clock limit for one CL.EXE run |
+| `maxOutputBytes` | `MSVC6_MAX_OUTPUT_BYTES` | `number` | `1048576` | Output captured before truncation |
+| `debounceMs` | `MSVC6_DEBOUNCE_MS` | `number` | `300` | Delay between last edit and a check |
+
+`includePaths` and `additionalFlags` accept an empty string to mean "no
+entries"; every other setting treats an empty string as an error. Setting only
+`msvcBasePath` re-derives `clPath` as `<base>/BIN/CL.EXE`. See `.env.example`
+for a copyable template.
+
+At startup the server checks that `clPath` and each include path exist and logs
+a clear message when one does not. Wine drive paths (`C:\msvc6\...`) are
+resolved by Wine, not the host filesystem, so they are not host-checked.
 
 ### Runtime Configuration
 
-Only `includePaths` and `warnLevel` can be changed at runtime via `workspace/didChangeConfiguration`. Other fields (especially `additionalFlags`) are locked to initialization to prevent arbitrary CL.EXE flag injection.
+`workspace/didChangeConfiguration` accepts `includePaths`, `warnLevel`, and
+`debounceMs` under the `msvc6` key. Other fields, especially `additionalFlags`,
+are locked to initialization to prevent arbitrary CL.EXE flag injection. The
+change is re-validated and the resolved config is logged.
 
 ## Architecture
 
 ```
 src/
-├── config.ts       # Configuration types, validation, Wine path conversion
+├── config.ts       # Config schema, env loading, validation, path checks, Wine path conversion
 ├── compiler.ts     # CL.EXE invocation (syntax-check mode)
 ├── diagnostics.ts  # MSVC output parser → LSP Diagnostic conversion
 └── server.ts       # LSP server lifecycle, debouncing, abort handling
