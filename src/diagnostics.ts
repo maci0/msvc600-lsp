@@ -140,6 +140,11 @@ export function toFailureDiagnostic(message: string): Diagnostic {
  * Case-folds, unifies separators, and normalizes to NFC so a path spelled
  * NFD by the filesystem (macOS) still matches the NFC spelling an editor or
  * database supplies.
+ *
+ * The NFC pass runs after the case fold, not before it: case folding is not
+ * normalization-preserving. `'İ'` (U+0130) is NFC, but its lowercase form is
+ * `i` + U+0307 COMBINING DOT ABOVE, which is NFD. Folding first and
+ * normalizing last is what makes the two spellings compare equal.
  */
 function normalizeForComparison(filePath: string): string {
   return filePath.normalize('NFC').toLowerCase().replace(/\\/g, '/');

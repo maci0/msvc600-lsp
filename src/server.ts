@@ -393,7 +393,7 @@ connection.listen();
 try {
   sweepStaleTempFiles();
 } catch (e) {
-  connection.console.error(`Stale temp sweep failed: ${String(e)}`);
+  logValidationError('Stale temp sweep failed', e);
 }
 
 export { connection, documents, scheduleValidation };

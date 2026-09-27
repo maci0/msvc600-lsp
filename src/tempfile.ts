@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { encodeSourceText } from './encoding';
 
 /** Prefix shared by every temp file the server creates, so leaked files are identifiable. */
 const TEMP_PREFIX = 'msvc6_lsp_';
@@ -51,7 +52,7 @@ export function createSystemTempFileStore(
   return {
     write(content: string, extension: string): string {
       const file = path.join(dir, `${TEMP_PREFIX}${generateName()}${extension}`);
-      fs.writeFileSync(file, content, { encoding: 'utf-8', mode: TEMP_FILE_MODE });
+      fs.writeFileSync(file, encodeSourceText(content), { mode: TEMP_FILE_MODE });
       return file;
     },
     remove(file: string): void {

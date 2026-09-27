@@ -23,4 +23,26 @@ describe('sanitizeForLog', () => {
   it('replaces null bytes and other C0 controls', () => {
     expect(sanitizeForLog('a\u0000b\u001fc')).toBe('a?b?c');
   });
+
+  it('replaces characters that render as nothing but change the bytes', () => {
+    // A path padded with U+3000 compares unequal to the same path without it.
+    expect(sanitizeForLog('cl.exe\u3000')).toBe('cl.exe?');
+    expect(sanitizeForLog('a\u00adb')).toBe('a?b');
+    expect(sanitizeForLog('a\u200cb')).toBe('a?b');
+    expect(sanitizeForLog('a\ufeffb')).toBe('a?b');
+  });
+
+  it('replaces variation selectors, which keep two spellings looking alike', () => {
+    expect(sanitizeForLog('\u2764\ufe0f')).toBe('\u2764?');
+    expect(sanitizeForLog('\ud83c\udff4\udb40\udc67')).toBe('\ud83c\udff4?');
+  });
+
+  it('replaces the bidi embedding and isolate controls', () => {
+    expect(sanitizeForLog('a\u2066b\u2069c')).toBe('a?b?c');
+  });
+
+  it('leaves ordinary non-ASCII text alone', () => {
+    const message = 'CL.EXE failed: 错误 C1083: Cannot open source file';
+    expect(sanitizeForLog(message)).toBe(message);
+  });
 });

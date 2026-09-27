@@ -5,6 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { TextDecoder } from 'util';
 import { Msvc6Config, CPP_EXTENSIONS, C_EXTENSIONS } from './config';
+import { encodeSourceText, prepareSourceText } from './encoding';
 import { toWinePath } from './wine-path';
 import { TempFileStore, createSystemTempFileStore } from './tempfile';
 
@@ -133,7 +134,8 @@ export class DocumentTooLargeError extends Error {
 
 /**
  * Writes `content` to a fresh temp file with the given extension and returns
- * its path. The caller owns the file and must unlink it.
+ * its path. The bytes written are the prepared UTF-8 source, so the size check
+ * and the file on disk agree. The caller owns the file and must unlink it.
  *
  * The create is exclusive (`wx`): a path that already exists in the shared
  * temp directory is an error rather than something to truncate, so a file or
@@ -141,10 +143,9 @@ export class DocumentTooLargeError extends Error {
  * applies only to a file this call creates, which is why the flag matters.
  */
 export function createTempSource(content: string, ext: string): string {
-  const body = stripByteOrderMark(content);
-  const byteLength = Buffer.byteLength(body, 'utf-8');
-  if (byteLength > MAX_SOURCE_BYTES) {
-    throw new DocumentTooLargeError(byteLength);
+  const body = encodeSourceText(content);
+  if (body.byteLength > MAX_SOURCE_BYTES) {
+    throw new DocumentTooLargeError(body.byteLength);
   }
 
   const tempFile = path.join(os.tmpdir(), `${TEMP_SOURCE_PREFIX}${randomUUID()}${ext}`);
@@ -360,7 +361,7 @@ export async function syntaxCheckContent(
 ): Promise<CompileResult & { tempFile: string }> {
   const ext = languageId === 'cpp' ? '.cpp' : '.c';
   const store = opts.store ?? createSystemTempFileStore();
-  const tempFile = store.write(stripByteOrderMark(content), ext);
+  const tempFile = store.write(prepareSourceText(content), ext);
 
   try {
     const result = await syntaxCheck(config, tempFile);
