@@ -17,18 +17,23 @@ function deferred(): { promise: Promise<void>; resolve: () => void; reject: (e: 
   return { promise, resolve, reject };
 }
 
+/** Runner failures these tests do not assert on. */
+function ignore(): void {
+  // Intentionally empty: the rejection path has its own test below.
+}
+
 describe('TaskQueue', () => {
   describe('constructor', () => {
     it('rejects a non-positive or fractional concurrency', () => {
-      expect(() => new TaskQueue(0)).toThrow(RangeError);
-      expect(() => new TaskQueue(-1)).toThrow(RangeError);
-      expect(() => new TaskQueue(1.5)).toThrow(RangeError);
+      expect(() => new TaskQueue(0, ignore)).toThrow(RangeError);
+      expect(() => new TaskQueue(-1, ignore)).toThrow(RangeError);
+      expect(() => new TaskQueue(1.5, ignore)).toThrow(RangeError);
     });
   });
 
   describe('concurrency bound', () => {
     it('starts at most `concurrency` tasks and holds the rest', async () => {
-      const queue = new TaskQueue(2);
+      const queue = new TaskQueue(2, ignore);
       const gates = [deferred(), deferred(), deferred(), deferred(), deferred()];
       let started = 0;
 
@@ -55,7 +60,7 @@ describe('TaskQueue', () => {
     });
 
     it('frees the slot when a task rejects', async () => {
-      const queue = new TaskQueue(1);
+      const queue = new TaskQueue(1, ignore);
       const failed = deferred();
       let started = 0;
 
@@ -75,7 +80,7 @@ describe('TaskQueue', () => {
 
   describe('superseding a key', () => {
     it('aborts the running entry, which then publishes nothing', async () => {
-      const queue = new TaskQueue(2);
+      const queue = new TaskQueue(2, ignore);
       const first = deferred();
       const published: string[] = [];
 
@@ -98,7 +103,7 @@ describe('TaskQueue', () => {
     });
 
     it('drops a queued entry without ever running it', async () => {
-      const queue = new TaskQueue(1);
+      const queue = new TaskQueue(1, ignore);
       const blocker = deferred();
       const ran: string[] = [];
 
@@ -122,7 +127,7 @@ describe('TaskQueue', () => {
     });
 
     it('leaves a newer entry in charge when an older one settles', async () => {
-      const queue = new TaskQueue(1);
+      const queue = new TaskQueue(1, ignore);
       const blocker = deferred();
       const seen: boolean[] = [];
 
@@ -169,7 +174,7 @@ describe('TaskQueue', () => {
 
   describe('cancel', () => {
     it('aborts a running entry and removes a queued one', async () => {
-      const queue = new TaskQueue(1);
+      const queue = new TaskQueue(1, ignore);
       const running = deferred();
       let runningAborted = false;
       const ran: string[] = [];
@@ -196,14 +201,14 @@ describe('TaskQueue', () => {
     });
 
     it('is a no-op for a key the queue never saw', () => {
-      const queue = new TaskQueue(1);
+      const queue = new TaskQueue(1, ignore);
       expect(() => queue.cancel('absent')).not.toThrow();
     });
   });
 
   describe('close', () => {
     it('aborts everything, refuses new work, and drains', async () => {
-      const queue = new TaskQueue(2);
+      const queue = new TaskQueue(2, ignore);
       const running = [deferred(), deferred()];
       const ran: string[] = [];
       let drained = false;
@@ -238,7 +243,37 @@ describe('TaskQueue', () => {
     });
 
     it('resolves drained immediately when nothing was ever submitted', async () => {
-      await expect(new TaskQueue(1).drained()).resolves.toBeUndefined();
+      await expect(new TaskQueue(1, ignore).drained()).resolves.toBeUndefined();
+    });
+  });
+
+  describe('runner rejection', () => {
+    it('reports a rejected runner instead of dropping the failure', async () => {
+      const seen: unknown[] = [];
+      const queue = new TaskQueue(1, (e) => seen.push(e));
+      const failure = new Error('runner exploded');
+
+      queue.submit('boom', async () => {
+        throw failure;
+      });
+      await flush();
+
+      expect(seen).toEqual([failure]);
+    });
+
+    it('frees the slot so the next task still runs', async () => {
+      const queue = new TaskQueue(1, ignore);
+      const ran: string[] = [];
+
+      queue.submit('boom', async () => {
+        throw new Error('runner exploded');
+      });
+      queue.submit('after', async () => {
+        ran.push('after');
+      });
+      await queue.drained();
+
+      expect(ran).toEqual(['after']);
     });
   });
 });

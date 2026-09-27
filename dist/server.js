@@ -75,7 +75,7 @@ const validationDebouncer = (0, scheduler_1.createDebouncer)(scheduler_1.realSch
  * Validation tasks, one per document URI. A new task for a URI aborts the
  * previous one, so a superseded edit never reaches the compiler.
  */
-const validationQueue = new task_queue_1.TaskQueue(compiler_1.MAX_CONCURRENT_CHECKS);
+const validationQueue = new task_queue_1.TaskQueue(compiler_1.MAX_CONCURRENT_CHECKS, (e) => logValidationError('Validation task rejected', e));
 /** Diagnostic code used for failures of the check itself, not of the source file. */
 const TOOL_ERROR_CODE = 'msvc600-check-failed';
 /** Range covering a whole first line, where tool-failure diagnostics are anchored. */
@@ -115,6 +115,10 @@ function warnAboutMissingExecutables(config) {
  */
 function isCheckFailure(e) {
     return !(e instanceof Error && 'code' in e);
+}
+/** Whether a filesystem error means the path was already gone. */
+function isMissingFile(e) {
+    return e instanceof Error && e.code === 'ENOENT';
 }
 /**
  * Reports a failure of the syntax check as a diagnostic on the document.
@@ -261,6 +265,21 @@ function getDocumentExtension(textDocument) {
 function errorMessage(e) {
     return e instanceof Error ? e.message : String(e);
 }
+/** Longest excerpt of CL.EXE output carried in a diagnostic message. */
+const OUTPUT_EXCERPT_CHARS = 200;
+/**
+ * The first non-empty line of CL.EXE output, shortened to fit a diagnostic, so
+ * a failure the parser could not turn into a diagnostic still says what the
+ * tool complained about.
+ */
+function outputExcerpt(rawOutput) {
+    const first = rawOutput.split(/\r?\n/).find((line) => line.trim() !== '')?.trim();
+    if (first === undefined)
+        return '(no output)';
+    return first.length > OUTPUT_EXCERPT_CHARS
+        ? `${first.slice(0, OUTPUT_EXCERPT_CHARS)}...`
+        : first;
+}
 /**
  * Queues a syntax check for `textDocument`, superseding any check already
  * queued or running for the same URI. The sequence number is taken here, at
@@ -296,11 +315,30 @@ async function runValidation(uri, handle, content, ext, signal) {
             return;
         }
         const parsed = (0, diagnostics_1.parseDiagnostics)(result.rawOutput);
-        connection.sendDiagnostics({ uri, diagnostics: (0, diagnostics_1.toLspDiagnostics)(parsed, tempFile) });
-        if (result.truncated) {
-            connection.console.error((0, logging_1.sanitizeForLog)(`CL.EXE output for ${uri} exceeded ${config.maxOutputBytes} bytes; ` +
-                'reported diagnostics are incomplete'));
+        const diagnostics = (0, diagnostics_1.toLspDiagnostics)(parsed, tempFile);
+        // A run cut short leaves a prefix of the real diagnostics. Publishing that
+        // prefix alone would tell the client the rest of the file is clean, so the
+        // incompleteness travels with it.
+        if (result.killedBySignal !== null) {
+            connection.console.error((0, logging_1.sanitizeForLog)(`CL.EXE for ${uri} was terminated by ${result.killedBySignal}`));
+            diagnostics.push((0, diagnostics_1.toFailureDiagnostic)(`CL.EXE was terminated by ${result.killedBySignal} before it finished; ` +
+                'the diagnostics above are incomplete.'));
         }
+        if (result.truncated) {
+            connection.console.error((0, logging_1.sanitizeForLog)(`CL.EXE output for ${uri} exceeded the ${config.maxOutputBytes} byte cap; ` +
+                'reported diagnostics are incomplete'));
+            diagnostics.push((0, diagnostics_1.toFailureDiagnostic)(`CL.EXE output for this file exceeded the ${config.maxOutputBytes} byte cap ` +
+                'and was truncated; the diagnostics above are incomplete.'));
+        }
+        // A non-zero exit with nothing to report for this file means the run
+        // failed in a way the parser does not recognise (a bad command line, a
+        // Wine error, a failure in an included header). Publishing the empty list
+        // would tell the client the file is clean on the strength of a failed run.
+        if (diagnostics.length === 0 && result.exitCode !== 0) {
+            diagnostics.push((0, diagnostics_1.toFailureDiagnostic)(`CL.EXE exited with code ${result.exitCode} without reporting a diagnostic ` +
+                `for this file. Its first line of output was: ${outputExcerpt(result.rawOutput)}`));
+        }
+        connection.sendDiagnostics({ uri, diagnostics });
     }
     catch (e) {
         if (signal.aborted)
@@ -328,8 +366,13 @@ async function runValidation(uri, handle, content, ext, signal) {
             try {
                 fs.unlinkSync(tempFile);
             }
-            catch {
-                // Temp file may already be gone.
+            catch (e) {
+                // ENOENT is the same end state as a successful unlink. Any other
+                // failure leaves the unsaved buffer on disk, so the path is recorded
+                // rather than dropped; the stale-file sweep reclaims it.
+                if (!isMissingFile(e)) {
+                    logValidationError(`Could not remove scratch source ${tempFile}`, e);
+                }
             }
         }
     }

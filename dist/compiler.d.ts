@@ -27,12 +27,21 @@ export interface CompileResult {
     /** True when output was truncated (maxBuffer exceeded). Diagnostics may be incomplete. */
     truncated: boolean;
     /**
-     * True when CL.EXE was killed after `config.checkTimeoutMs`. The exit code
-     * and output are then meaningless: no diagnostic in `rawOutput` was produced
+     * True when CL.EXE was killed after `checkTimeoutMs`. The exit code and
+     * output are then meaningless: no diagnostic in `rawOutput` was produced
      * by a completed run, and a missing diagnostic means the check timed out,
      * not that the file is clean.
      */
     timedOut: boolean;
+    /**
+     * The signal that terminated CL.EXE, when a signal other than this server's
+     * own timeout kill ended the run (an out-of-memory kill, a `SIGKILL` from
+     * an operator, a crash under Wine). The child never reached a completed run,
+     * so its output is a prefix of the diagnostics at best and the exit code
+     * carries no meaning. `null` for every run that was killed by the configured
+     * timeout, which is reported as {@link CompileResult.timedOut} instead.
+     */
+    killedBySignal: string | null;
 }
 /**
  * Builds the CL.EXE argument list for a syntax-only check.
@@ -52,7 +61,8 @@ export declare function buildArgs(config: Msvc6Config, filePath: string): string
  * be attempted at all: the executable could not be spawned (ENOENT, EACCES,
  * ENOTDIR), the call was aborted, or `outputEncoding` is not a known label.
  * A run that was killed by `timeoutMs` resolves with `timedOut: true` and an
- * exit code that carries no diagnostic meaning.
+ * exit code that carries no diagnostic meaning. A run ended by any other
+ * signal resolves with `killedBySignal` naming it.
  */
 export declare function syntaxCheck(config: Msvc6Config, filePath: string, opts?: {
     signal?: AbortSignal;

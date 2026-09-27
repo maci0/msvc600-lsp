@@ -199,6 +199,7 @@ describe('syntaxCheck failure signalling', () => {
       };
       const result = await syntaxCheck(cfg, path.join(FIXTURES, 'valid.c'), { timeoutMs: 300 });
       expect(result.timedOut).toBe(true);
+      expect(result.killedBySignal).toBeNull();
       expect(result.truncated).toBe(false);
       expect(result.rawOutput.trim()).toBe('');
     },
@@ -214,6 +215,38 @@ describe('syntaxCheck failure signalling', () => {
       };
       const result = await syntaxCheck(cfg, path.join(FIXTURES, 'valid.c'));
       expect(result.timedOut).toBe(false);
+      expect(result.killedBySignal).toBeNull();
+    },
+  );
+
+  it.runIf(process.platform !== 'win32')(
+    'names the signal when the child is killed outside the exec timeout',
+    async () => {
+      const cfg = {
+        ...testConfig(),
+        useWine: false,
+        clPath: path.join(FIXTURES, 'self_kill.mjs'),
+      };
+      const result = await syntaxCheck(cfg, path.join(FIXTURES, 'valid.c'));
+      // The run never completed, so it is neither a timeout nor a result the
+      // caller may read as a clean or a complete check.
+      expect(result.killedBySignal).toBe('SIGKILL');
+      expect(result.timedOut).toBe(false);
+    },
+  );
+
+  it.runIf(process.platform !== 'win32')(
+    'keeps the exit code CL.EXE itself returned',
+    async () => {
+      const cfg = {
+        ...testConfig(),
+        useWine: false,
+        clPath: path.join(FIXTURES, 'exit_without_diagnostic.mjs'),
+      };
+      const result = await syntaxCheck(cfg, path.join(FIXTURES, 'valid.c'));
+      // Node carries a non-zero exit on error.code; flattening it to 1 would
+      // hide which failure the run ended in.
+      expect(result.exitCode).toBe(2);
     },
   );
 

@@ -82,6 +82,58 @@ function buildArgs(config, filePath) {
     args.push(config.useWine ? (0, wine_path_1.toWinePath)(filePath) : filePath);
     return args;
 }
+/**
+ * Extracts the child process exit code from an `execFile` callback error.
+ *
+ * `error.code` is overloaded: a string for a failure of the spawn itself
+ * (`'ENOENT'`, `'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'`), and the child's own
+ * numeric exit code when the child ran and returned non-zero. `status` is not
+ * set by `execFile`, so a numeric `code` is the only place the real code
+ * survives; reading `status` alone flattens every CL.EXE failure to 1. An
+ * error carrying neither means the run never reached an exit, which is
+ * reported as 1 so it cannot be read as success.
+ */
+function getExitCode(error) {
+    if (!error)
+        return 0;
+    const asExec = error;
+    if (typeof asExec.status === 'number')
+        return asExec.status;
+    if (typeof asExec.code === 'number')
+        return asExec.code;
+    return 1;
+}
+/**
+ * Decodes CL.EXE output bytes. A `TextDecoder` never throws on malformed
+ * input, so undecodable bytes become U+FFFD rather than aborting the check.
+ */
+function decodeOutput(bytes, decoder) {
+    return decoder.decode(bytes);
+}
+/**
+ * Whether the child was killed by the exec timeout rather than by the caller.
+ * A timeout kill carries no string `code` (it is `null`) and no `status`, so
+ * only `killed` distinguishes it from an ordinary non-zero exit.
+ */
+function isTimeoutKill(error) {
+    return error != null && error.killed === true;
+}
+/**
+ * The signal that ended the child, when the run did not finish on its own.
+ *
+ * A timed-out run is killed by this process on purpose and is reported as
+ * `timedOut`, so it is not also a signal kill. Any other signal came from
+ * outside: the OOM killer, an operator, or a crash under Wine. The child wrote
+ * whatever it had reached and stopped, so a non-zero exit code over that
+ * partial output is indistinguishable from a real compile failure, and
+ * publishing the partial output alone would read as a complete check.
+ */
+function signalKill(error, timedOut) {
+    if (timedOut || error == null)
+        return null;
+    const signal = error.signal;
+    return typeof signal === 'string' && signal.length > 0 ? signal : null;
+}
 const checkSlots = new concurrency_1.Semaphore(exports.MAX_CONCURRENT_CHECKS);
 function abortError() {
     const error = new Error('CL.EXE check aborted');
@@ -101,7 +153,8 @@ function abortError() {
  * be attempted at all: the executable could not be spawned (ENOENT, EACCES,
  * ENOTDIR), the call was aborted, or `outputEncoding` is not a known label.
  * A run that was killed by `timeoutMs` resolves with `timedOut: true` and an
- * exit code that carries no diagnostic meaning.
+ * exit code that carries no diagnostic meaning. A run ended by any other
+ * signal resolves with `killedBySignal` naming it.
  */
 async function syntaxCheck(config, filePath, opts = {}) {
     const release = await checkSlots.acquire(opts.signal);
@@ -115,32 +168,6 @@ async function syntaxCheck(config, filePath, opts = {}) {
     finally {
         release();
     }
-}
-/**
- * Extracts the child process exit code from an `execFile` callback error.
- *
- * Node.js `ExecException` always sets `error.code` to a *string* (e.g.
- * `'ENOENT'`, `'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'`). The numeric exit
- * code — when the child ran but returned non-zero — is exposed on the
- * non-standard `status` property set by `child_process` internals.
- * We check `status` first to avoid silently flattening every CL.EXE
- * failure to exit code 1.
- */
-function getExitCode(error) {
-    if (!error)
-        return 0;
-    const asExec = error;
-    if (typeof asExec.status === 'number')
-        return asExec.status;
-    return 1;
-}
-/**
- * Whether the child was killed by the exec timeout rather than by the caller.
- * A timeout kill carries no string `code` (it is `null`) and no `status`, so
- * only `killed` distinguishes it from an ordinary non-zero exit.
- */
-function isTimeoutKill(error) {
-    return error != null && error.killed === true;
 }
 function runCheck(config, filePath, opts) {
     return new Promise((resolve, reject) => {
@@ -178,10 +205,8 @@ function runCheck(config, filePath, opts) {
             killSignal: 'SIGKILL',
             encoding: 'buffer',
         }, (error, stdoutBytes, stderrBytes) => {
-            // A TextDecoder never throws on malformed input, so undecodable bytes
-            // become U+FFFD rather than aborting the check.
-            const stdout = decoder.decode(stdoutBytes);
-            const stderr = decoder.decode(stderrBytes);
+            const stdout = decodeOutput(stdoutBytes, decoder);
+            const stderr = decodeOutput(stderrBytes, decoder);
             if (error) {
                 const isSpawnFailure = error.code === 'ENOENT' || error.code === 'EACCES' || error.code === 'ENOTDIR';
                 if (isSpawnFailure && !stdout && !stderr) {
@@ -199,7 +224,15 @@ function runCheck(config, filePath, opts) {
             const timedOut = !truncated && isTimeoutKill(error);
             const exitCode = getExitCode(error);
             const rawOutput = stdout + '\n' + stderr;
-            resolve({ stdout, stderr, exitCode, rawOutput, truncated, timedOut });
+            resolve({
+                stdout,
+                stderr,
+                exitCode,
+                rawOutput,
+                truncated,
+                timedOut,
+                killedBySignal: signalKill(error, timedOut),
+            });
         });
     });
 }

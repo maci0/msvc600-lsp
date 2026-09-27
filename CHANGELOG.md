@@ -50,6 +50,18 @@ package version, not a published artifact.
   failed on a missing module.
 - The noisy-output test fixture wrote to no file descriptor, so the stand-in compiler exited
   before emitting anything and the truncation path was never exercised.
+- A check that ended early is no longer published as a clean file. A child killed by any signal
+  other than the configured timeout, output truncated by `maxOutputBytes`, and a non-zero exit
+  that produced no diagnostic for the file all reach the editor as a note that the list is
+  incomplete, carrying the signal, the byte cap, or the exit code and CL.EXE's first output line.
+  Each case previously published a prefix, or nothing, that read as a full clean result.
+- The exit code reported for a failed check is the one CL.EXE returned. `execFile` carries it on
+  `error.code`, not on `error.status`, so every failure was flattened to 1.
+- The timeout and output-cap notes name `checkTimeoutMs` and `maxOutputBytes` as configured
+  rather than the built-in defaults, which is what a client that changed them was told.
+- A validation task that rejects is reported instead of being swallowed, and a scratch source
+  that could not be unlinked is logged with its path, so a failed cleanup is not a silent
+  leak of the unsaved buffer.
 
 ## [0.1.0] - 2026-09-27
 

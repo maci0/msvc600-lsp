@@ -5,6 +5,8 @@ import * as os from 'os';
 import * as path from 'path';
 import { MSVC_ROOT, PROJECT_ROOT, describeWithToolchain } from './helpers/toolchain';
 
+const FIXTURES = path.resolve(__dirname, 'fixtures');
+
 /** Typed LSP JSON-RPC message for test assertions. */
 interface LspMessage {
   jsonrpc: string;
@@ -331,6 +333,90 @@ describe('LSP Server tool failure signalling', () => {
     expect(diagnostics[0].code).toBe('msvc600-check-failed');
     expect(diagnostics[0].message).toMatch(/ENOENT/);
   });
+
+  /** Diagnostics published for `uri`, waiting for the first non-empty set. */
+  async function diagnosticsFor(
+    uri: string,
+    options: Record<string, unknown>,
+    text: string,
+  ): Promise<Array<{ message?: string; source?: string; code?: string }>> {
+    serverProcess = startServer();
+    await initServer(serverProcess, options);
+    sendNotification(serverProcess, 'textDocument/didOpen', {
+      textDocument: { uri, languageId: 'c', version: 1, text },
+    });
+
+    const messages = await waitForMessages(serverProcess, 1, 15000, (m): boolean =>
+      isLspMessage(m) &&
+      m.method === 'textDocument/publishDiagnostics' &&
+      m.params?.uri === uri &&
+      (m.params.diagnostics?.length ?? 0) > 0,
+    );
+    const notif = messages.find(
+      (m): m is LspMessage =>
+        isLspMessage(m) && m.method === 'textDocument/publishDiagnostics' && m.params?.uri === uri,
+    );
+    return notif!.params!.diagnostics!;
+  }
+
+  const fixture = (name: string): string => path.join(FIXTURES, name);
+
+  it.runIf(process.platform !== 'win32')(
+    'reports a run cut short by a signal instead of a clean file',
+    async () => {
+      const diagnostics = await diagnosticsFor(
+        'file:///tmp/test_signal_kill.c',
+        { useWine: false, clPath: fixture('self_kill.mjs') },
+        'int main(void) { return 0; }\n',
+      );
+
+      expect(diagnostics.some((d) => /terminated by SIGKILL/.test(d.message ?? ''))).toBe(true);
+    },
+  );
+
+  it.runIf(process.platform !== 'win32')(
+    'marks truncated output as an incomplete check',
+    async () => {
+      const diagnostics = await diagnosticsFor(
+        'file:///tmp/test_truncated.c',
+        { useWine: false, clPath: fixture('emit_flood.mjs'), maxOutputBytes: 4096 },
+        'int main(void) { return 0; }\n',
+      );
+
+      // Without the marker the client would read the capped output as a
+      // complete list and mark the rest of the file clean.
+      expect(diagnostics.some((d) => /4096 byte cap/.test(d.message ?? ''))).toBe(true);
+    },
+  );
+
+  it.runIf(process.platform !== 'win32')(
+    'reports a failed run that produced no parseable diagnostic',
+    async () => {
+      const diagnostics = await diagnosticsFor(
+        'file:///tmp/test_no_diagnostic.c',
+        { useWine: false, clPath: fixture('exit_without_diagnostic.mjs') },
+        'int main(void) { return 0; }\n',
+      );
+
+      // A non-zero exit with no file(line) diagnostic: publishing the parsed
+      // list alone would have marked the file clean.
+      expect(diagnostics.some((d) => /exited with code 2/.test(d.message ?? ''))).toBe(true);
+      expect(diagnostics.some((d) => /D8021/.test(d.message ?? ''))).toBe(true);
+    },
+  );
+
+  it.runIf(process.platform !== 'win32')(
+    'names the configured timeout rather than the default',
+    async () => {
+      const diagnostics = await diagnosticsFor(
+        'file:///tmp/test_timed_out.c',
+        { useWine: false, clPath: fixture('hang.mjs'), checkTimeoutMs: 1000 },
+        'int main(void) { return 0; }\n',
+      );
+
+      expect(diagnostics.some((d) => /within 1000 ms/.test(d.message ?? ''))).toBe(true);
+    },
+  );
 });
 
 /** Runs the built entry point with `args` and collects its output and exit code. */

@@ -9,6 +9,7 @@ class TaskQueue {
      * every edit and every close, scan and splice the whole backlog.
      */
     queue = new Map();
+    onError;
     /** Live entry per key, queued or running. The handle used to supersede. */
     byKey = new Map();
     /** Entries currently inside `run`, keyed by an object only this queue holds. */
@@ -16,11 +17,18 @@ class TaskQueue {
     /** `drained` resolvers, parked until the queue goes idle. */
     waiters = [];
     closed = false;
-    constructor(concurrency) {
+    /**
+     * `onError` receives every runner rejection. A runner is expected to handle
+     * its own failures, so a rejection reaching here is the queue eating an
+     * error nobody else will see; the queue cannot report it any other way
+     * without either an unhandled rejection or a slot that is never released.
+     */
+    constructor(concurrency, onError) {
         if (!Number.isInteger(concurrency) || concurrency < 1) {
             throw new RangeError(`concurrency must be a positive integer, got ${concurrency}`);
         }
         this.concurrency = concurrency;
+        this.onError = onError;
     }
     /** Number of entries waiting for a free slot. */
     get pending() {
@@ -91,12 +99,13 @@ class TaskQueue {
         this.settleWaiters();
     }
     dispatch(entry) {
-        // The runner owns its own rejection; letting it through would make a
-        // transient compile failure an unhandled rejection. Swallow it here so
-        // `finish` runs exactly once either way.
+        // The runner owns its own rejections, so a failure reaching here is a bug
+        // in the runner rather than an expected outcome. It is handed to `onError`
+        // instead of dropped, and `finish` still runs so the slot is returned
+        // either way.
         void entry
             .run(entry.controller.signal)
-            .catch(() => undefined)
+            .catch((e) => this.onError(e))
             .then(() => this.finish(entry));
     }
     finish(entry) {

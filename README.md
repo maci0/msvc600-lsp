@@ -190,9 +190,7 @@ Diagnostics are line-scoped: each one spans columns 0 to the end of the reported
 
 At most two `CL.EXE` children run at once; the rest queue, so a large revalidation after a settings change cannot spawn a process per open document. Buffers above 8 MiB are not written to the temp directory at all, and the editor shows a single `msvc6-too-large` note in their place.
 
-A check that never ran, whether CL.EXE cannot be spawned or the scratch source cannot be written, publishes one error diagnostic at the top of the file saying so rather than an empty list, so a broken setup never reads as a clean file.
-
-A check that never completes, or that cannot start CL.EXE at all, is reported as an `msvc600-check-failed` diagnostic on the file rather than as an empty list, so a broken toolchain is never mistaken for a clean file. Truncated output still publishes its diagnostics, and the dropped tail is logged to the server log.
+A check that did not finish never reads as a clean file. One that could not be spawned, or whose scratch source could not be written, publishes one `msvc600-check-failed` diagnostic at the top of the file saying so. One killed by `checkTimeoutMs`, or terminated by any other signal, is reported the same way. Truncated output keeps the diagnostics that did fit and adds a note that the list is incomplete. A non-zero exit with no diagnostic for this file, a rejected command line or a Wine failure being the usual cause, adds a note carrying the exit code and CL.EXE's first line of output.
 
 ## Development
 

@@ -1,7 +1,12 @@
 export declare class TaskQueue {
     private readonly concurrency;
-    /** Waiting entries, oldest first. */
+    /**
+     * Waiting entries in submission order. A Map keeps FIFO order and drops an
+     * entry in constant time; an array would make every cancel, which runs on
+     * every edit and every close, scan and splice the whole backlog.
+     */
     private queue;
+    private readonly onError;
     /** Live entry per key, queued or running. The handle used to supersede. */
     private byKey;
     /** Entries currently inside `run`, keyed by an object only this queue holds. */
@@ -9,7 +14,13 @@ export declare class TaskQueue {
     /** `drained` resolvers, parked until the queue goes idle. */
     private waiters;
     private closed;
-    constructor(concurrency: number);
+    /**
+     * `onError` receives every runner rejection. A runner is expected to handle
+     * its own failures, so a rejection reaching here is the queue eating an
+     * error nobody else will see; the queue cannot report it any other way
+     * without either an unhandled rejection or a slot that is never released.
+     */
+    constructor(concurrency: number, onError: (error: unknown) => void);
     /** Number of entries waiting for a free slot. */
     get pending(): number;
     /**
