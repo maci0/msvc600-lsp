@@ -94,6 +94,6 @@ for f in "$MSVC_ROOT/BIN/"*; do
 done
 
 echo "Done. MSVC6 overlay created at $DEST"
-echo "  Include: C:\\msvc6\\include"
-echo "  Lib:     C:\\msvc6\\lib"
-echo "  Bin:     C:\\msvc6\\bin"
+printf '  Include: %s\n' 'C:\msvc6\include'
+printf '  Lib:     %s\n' 'C:\msvc6\lib'
+printf '  Bin:     %s\n' 'C:\msvc6\bin'

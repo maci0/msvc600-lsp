@@ -17,6 +17,7 @@ Debouncing (300 ms) and abort-on-stale ensure only the latest edit triggers a ch
 
 - **Bun** — runs every script in `package.json`, including `build`, `test`, and `start`
 - **Node.js ≥ 18**
+- **ShellCheck** — lints `scripts/*.sh` as part of `bun run check`
 - **Wine** (Linux/macOS) or native Windows
 - **MSVC 6.0 installation**: `VC/VC98/{BIN,INCLUDE,LIB}` must be present at the package root, since that path is the default `msvcBasePath`. On Linux, `bun run setup` mirrors the tree into `~/.wine/drive_c/msvc6` with a lowercased copy of every file, because MSVC headers use mixed-case `#include` lines that do not resolve on a case-sensitive filesystem. The script is Linux-only (it writes to `~/.wine/drive_c`), so on macOS point `includePaths` at `VC/VC98/INCLUDE` instead.
 

@@ -24,11 +24,16 @@ if [ ! -d "$PROJECT_ROOT/node_modules" ]; then
     fail "node_modules" "run 'bun install'"
 fi
 
+if ! command -v shellcheck >/dev/null 2>&1; then
+    fail "shellcheck" "install ShellCheck; 'bun run check' lints scripts/*.sh with it"
+fi
+
 if [ ! -x "$CL_EXE" ] && [ ! -f "$CL_EXE" ]; then
     fail "MSVC 6.0 at VC/VC98/BIN/CL.EXE" "copy the MSVC 6.0 tree into VC/VC98 (it is not in git)"
 fi
 
-if [ "$(uname -s)" != "MINGW"* ] && [ "$(uname -s)" != "CYGWIN"* ]; then
+uname_s=$(uname -s)
+if [[ "$uname_s" != MINGW* && "$uname_s" != CYGWIN* ]]; then
     if ! command -v wine >/dev/null 2>&1; then
         fail "wine" "install Wine, or set useWine=false and use a native Windows CL.EXE"
     elif [ ! -d "$OVERLAY_DIR/include" ]; then
