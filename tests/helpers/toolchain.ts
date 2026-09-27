@@ -1,5 +1,6 @@
 import { describe } from 'vitest';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 
 export const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
@@ -57,15 +58,21 @@ export const describeWithToolchain = describe.skipIf(blocker !== null);
  * Config fields that make the compiler under test a fixture script instead of
  * CL.EXE. The fixtures are `.mjs` files with a shebang, which a POSIX host runs
  * directly; a Windows host has neither shebang handling nor an exec bit for
- * `execFile`, and raises EFTYPE, so there node runs the script and the fixture
- * path rides in the argument list.
+ * `execFile`, and raises EFTYPE.
+ *
+ * On Windows the fixture is run through a generated `.cmd` shim. `execFile` has
+ * no interpreter argument, so the `node` binary has to be the executable, and
+ * its first non-option argument would then be the script — but `buildArgs` puts
+ * `/nologo` first, and node reads a leading `/` argument as a path once the
+ * command line is quoted, answering `Cannot find module 'D:\nologo'` and
+ * exiting before the script runs. The shim names the script itself, so only
+ * compiler arguments reach node, and `compiler.ts` starts a `.cmd` through the
+ * shell.
  *
  * `node` is taken from `PATH` rather than from `process.execPath`: the suite is
  * launched with Bun, and the Bun binary does not run the fixture on a Windows
- * host. The `--` separator ends node's own option parsing, because the compiler
- * arguments `/Zs /W4 /I ...` otherwise reach node as options of its own and it
- * exits before the script is read. A missing `node` is reported rather than
- * papered over, because the same silence would return.
+ * host. A missing `node` is reported rather than papered over, because the same
+ * silence would return.
  */
 export function spyCompiler(script: string): {
   clPath: string;
@@ -74,7 +81,9 @@ export function spyCompiler(script: string): {
   if (process.platform === 'win32') {
     const node = whichPath('node');
     if (node === null) throw new Error('node is not on PATH; the fixture scripts need it');
-    return { clPath: node, additionalFlags: ['--', script] };
+    const shim = path.join(os.tmpdir(), `msvc6_lsp_spy_${path.basename(script)}.cmd`);
+    fs.writeFileSync(shim, `@echo off\r\n"${node}" "${script}" %*\r\n`);
+    return { clPath: shim, additionalFlags: [] };
   }
   return { clPath: script, additionalFlags: [] };
 }

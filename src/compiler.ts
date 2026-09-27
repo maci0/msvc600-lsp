@@ -207,6 +207,10 @@ function runCheck(
         signal: opts.signal,
         killSignal: 'SIGKILL',
         encoding: 'buffer',
+        // `clPath` is a `.cmd` shim in some configurations (a Windows host
+        // cannot run a `.mjs` fixture directly), and `execFile` needs a shell to
+        // start one. It stays off elsewhere: a real CL.EXE is started directly.
+        shell: process.platform === 'win32' && /\.(cmd|bat)$/i.test(executable),
       },
       (error, stdoutBytes, stderrBytes) => {
         // A TextDecoder never throws on malformed input, so undecodable bytes

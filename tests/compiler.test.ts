@@ -451,13 +451,7 @@ describe('syntaxCheck output limits', () => {
       process.env.MSVC6_TEST_TRACE = trace;
       try {
         const result = await syntaxCheck(cfg, path.join(FIXTURES, 'valid.c'));
-        const exists = fs.existsSync(trace);
-        const markers = exists ? fs.readFileSync(trace, 'utf-8').trim().split('\n') : [];
-        console.log(
-          `DIAG2 timeout=${checkTimeoutMs} cfg=${JSON.stringify(cfg.additionalFlags)} ` +
-            `exists=${exists} markers=${JSON.stringify(markers)} exit=${result.exitCode} ` +
-            `timedOut=${result.timedOut} raw=${JSON.stringify(result.rawOutput)} err=${JSON.stringify(result.stderr)}`,
-        );
+        const markers = fs.existsSync(trace) ? fs.readFileSync(trace, 'utf-8').trim().split('\n') : [];
         return { markers, exitCode: result.exitCode };
       } finally {
         delete process.env.MSVC6_TEST_TRACE;
