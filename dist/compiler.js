@@ -45,6 +45,7 @@ const fs = __importStar(require("fs"));
 const os = __importStar(require("os"));
 const path = __importStar(require("path"));
 const config_1 = require("./config");
+const wine_path_1 = require("./wine-path");
 /** Scratch sources are named with this prefix so a crashed run leaves identifiable leftovers. */
 const TEMP_SOURCE_PREFIX = 'msvc6_lsp_';
 /** Suffixes a scratch source may carry. */
@@ -65,7 +66,7 @@ function buildArgs(config, filePath) {
     for (const inc of config.includePaths) {
         // Wine cannot resolve POSIX paths — only absolute POSIX paths need conversion;
         // Windows-style and relative paths are already in a form CL.EXE understands.
-        const resolvedInc = config.useWine && inc.startsWith('/') ? (0, config_1.toWinePath)(inc) : inc;
+        const resolvedInc = config.useWine && inc.startsWith('/') ? (0, wine_path_1.toWinePath)(inc) : inc;
         args.push('/I', resolvedInc);
     }
     const ext = path.extname(filePath).toLowerCase();
@@ -76,7 +77,7 @@ function buildArgs(config, filePath) {
         args.push('/TC');
     }
     args.push(...config.additionalFlags);
-    args.push(config.useWine ? (0, config_1.toWinePath)(filePath) : filePath);
+    args.push(config.useWine ? (0, wine_path_1.toWinePath)(filePath) : filePath);
     return args;
 }
 /**
@@ -211,9 +212,8 @@ function stripByteOrderMark(content) {
  * Writes `content` to a temp file and runs a syntax check on it.
  * The temp file is cleaned up after the check completes.
  *
- * **Public API** — not used internally by the LSP server (which manages its
- * own temp files for abort/stale-result handling), but exported for
- * programmatic consumers who want a simpler one-shot interface.
+ * Exported for the test suite; the server manages its own temp files so it
+ * can abort stale checks.
  */
 async function syntaxCheckContent(config, content, languageId) {
     const tempFile = createTempSourcePath(languageId);

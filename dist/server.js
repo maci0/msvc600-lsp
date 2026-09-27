@@ -35,7 +35,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.documents = exports.connection = void 0;
 exports.getConfig = getConfig;
-exports.validateDocument = validateDocument;
+exports.scheduleValidation = scheduleValidation;
 const node_1 = require("vscode-languageserver/node");
 const vscode_languageserver_textdocument_1 = require("vscode-languageserver-textdocument");
 const vscode_uri_1 = require("vscode-uri");
@@ -45,6 +45,7 @@ const config_1 = require("./config");
 const compiler_1 = require("./compiler");
 const diagnostics_1 = require("./diagnostics");
 const validation_state_1 = require("./validation-state");
+const task_queue_1 = require("./task-queue");
 const connection = (0, node_1.createConnection)(node_1.ProposedFeatures.all);
 exports.connection = connection;
 const documents = new node_1.TextDocuments(vscode_languageserver_textdocument_1.TextDocument);
@@ -53,11 +54,21 @@ let config = (0, config_1.defaultConfig)();
 let hasConfigurationCapability = false;
 /** Decides which validation result per URI is allowed to reach the client. */
 const validationSequencer = new validation_state_1.ValidationSequencer();
-/** Per-URI abort controllers — cancels stale in-flight CL.EXE processes. */
-const validationAbort = new Map();
 /** Per-URI debounce timers for `onDidChangeContent`. */
 const pendingValidations = new Map();
 const DEBOUNCE_MS = 300;
+/**
+ * At most this many CL.EXE children exist at once. Each check is a heavyweight
+ * process (a full Wine services startup on non-Windows), so the number is kept
+ * at the parallelism a developer machine can actually absorb; the queue
+ * serialises the rest rather than dropping them.
+ */
+const MAX_CONCURRENT_CHECKS = 2;
+/**
+ * Validation tasks, one per document URI. A new task for a URI aborts the
+ * previous one, so a superseded edit never reaches the compiler.
+ */
+const validationQueue = new task_queue_1.TaskQueue(MAX_CONCURRENT_CHECKS);
 connection.onInitialize((params) => {
     const capabilities = params.capabilities;
     hasConfigurationCapability = !!(capabilities.workspace && capabilities.workspace.configuration);
@@ -99,16 +110,9 @@ connection.onDidChangeConfiguration((change) => {
     for (const t of pendingValidations.values())
         clearTimeout(t);
     pendingValidations.clear();
-    void (async () => {
-        for (const d of documents.all()) {
-            try {
-                await validateDocument(d);
-            }
-            catch (e) {
-                connection.console.error(`Validation error (config change): ${String(e)}`);
-            }
-        }
-    })();
+    // The queue bounds how many of these become CL.EXE children at once.
+    for (const d of documents.all())
+        scheduleValidation(d);
 });
 documents.onDidChangeContent((change) => {
     const uri = change.document.uri;
@@ -120,7 +124,7 @@ documents.onDidChangeContent((change) => {
         const doc = documents.get(uri);
         if (!doc)
             return;
-        validateDocument(doc).catch((e) => connection.console.error(`Validation error: ${String(e)}`));
+        scheduleValidation(doc);
     }, DEBOUNCE_MS));
 });
 documents.onDidSave((change) => {
@@ -130,7 +134,7 @@ documents.onDidSave((change) => {
         clearTimeout(pending);
         pendingValidations.delete(uri);
     }
-    validateDocument(change.document).catch((e) => connection.console.error(`Validation error: ${String(e)}`));
+    scheduleValidation(change.document);
 });
 documents.onDidClose((event) => {
     const uri = event.document.uri;
@@ -139,13 +143,25 @@ documents.onDidClose((event) => {
         clearTimeout(pending);
         pendingValidations.delete(uri);
     }
-    const abort = validationAbort.get(uri);
-    if (abort) {
-        abort.abort();
-        validationAbort.delete(uri);
-    }
+    validationQueue.cancel(uri);
     validationSequencer.close(uri);
     connection.sendDiagnostics({ uri, diagnostics: [] });
+});
+/** Longest shutdown waits for aborted checks to unlink their temp files. */
+const SHUTDOWN_DRAIN_MS = 2000;
+connection.onShutdown(async () => {
+    // The client is going away. Pending debounce timers would fire into a dead
+    // session, and any CL.EXE child still running would be orphaned onto the
+    // machine when the process exits. Draining lets the aborted checks unlink
+    // their temp files, which hold the document text.
+    for (const t of pendingValidations.values())
+        clearTimeout(t);
+    pendingValidations.clear();
+    validationQueue.close();
+    await Promise.race([
+        validationQueue.drained(),
+        new Promise((resolve) => setTimeout(resolve, SHUTDOWN_DRAIN_MS).unref()),
+    ]);
 });
 /**
  * Extracts the file extension from a document URI using proper URI parsing,
@@ -163,31 +179,39 @@ function getDocumentExtension(textDocument) {
     }
     return path.extname(textDocument.uri).toLowerCase();
 }
-async function validateDocument(textDocument) {
+/**
+ * Queues a syntax check for `textDocument`, superseding any check already
+ * queued or running for the same URI. The sequence number is taken here, at
+ * submission, so a result can be matched back to the request that produced it
+ * even while it waits for a free slot.
+ */
+function scheduleValidation(textDocument) {
     const ext = getDocumentExtension(textDocument);
     if (!config_1.ALL_EXTENSIONS.includes(ext)) {
         return;
     }
     const uri = textDocument.uri;
     const handle = validationSequencer.begin(uri);
-    const previousAbort = validationAbort.get(uri);
-    if (previousAbort)
-        previousAbort.abort();
-    const abort = new AbortController();
-    validationAbort.set(uri, abort);
-    const content = textDocument.getText();
     const langId = config_1.CPP_EXTENSIONS.includes(ext)
         ? 'cpp'
         : textDocument.languageId === 'cpp'
             ? 'cpp'
             : 'c';
     const tempFile = (0, compiler_1.createTempSourcePath)(langId);
+    // Content and temp path are snapshotted at submission so a queued check
+    // never re-reads a document that has since changed.
+    const content = textDocument.getText();
+    validationQueue.submit(uri, (signal) => runValidation(uri, handle, content, tempFile, signal));
+}
+async function runValidation(uri, handle, content, tempFile, signal) {
+    if (signal.aborted)
+        return;
     try {
         fs.writeFileSync(tempFile, (0, compiler_1.stripByteOrderMark)(content), {
             encoding: 'utf-8',
             mode: 0o600,
         });
-        const result = await (0, compiler_1.syntaxCheck)(config, tempFile, { signal: abort.signal });
+        const result = await (0, compiler_1.syntaxCheck)(config, tempFile, { signal });
         if (!handle.isCurrent())
             return;
         const parsed = (0, diagnostics_1.parseDiagnostics)(result.rawOutput);
@@ -195,17 +219,14 @@ async function validateDocument(textDocument) {
         connection.sendDiagnostics({ uri, diagnostics });
     }
     catch (e) {
-        if (abort.signal.aborted)
+        if (signal.aborted)
             return;
         if (handle.isCurrent()) {
             connection.sendDiagnostics({ uri, diagnostics: [] });
         }
-        throw e;
+        connection.console.error(`Validation error (${uri}): ${String(e)}`);
     }
     finally {
-        if (validationAbort.get(uri) === abort) {
-            validationAbort.delete(uri);
-        }
         try {
             fs.unlinkSync(tempFile);
         }

@@ -49,9 +49,8 @@ export declare function stripByteOrderMark(content: string): string;
  * Writes `content` to a temp file and runs a syntax check on it.
  * The temp file is cleaned up after the check completes.
  *
- * **Public API** — not used internally by the LSP server (which manages its
- * own temp files for abort/stale-result handling), but exported for
- * programmatic consumers who want a simpler one-shot interface.
+ * Exported for the test suite; the server manages its own temp files so it
+ * can abort stale checks.
  */
 export declare function syntaxCheckContent(config: Msvc6Config, content: string, languageId: string): Promise<CompileResult & {
     tempFile: string;

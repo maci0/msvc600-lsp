@@ -54,18 +54,4 @@ export declare function validateConfig(raw: unknown): Partial<Msvc6Config>;
  * re-checking every open document.
  */
 export declare function runtimeConfigEquals(a: Msvc6Config, b: Msvc6Config): boolean;
-/**
- * Converts a Linux/macOS filesystem path to a Wine-compatible Z:-drive path.
- *
- * Example: `/tmp/test.c` → `Z:\tmp\test.c`
- */
-export declare function toWinePath(linuxPath: string): string;
-/**
- * Converts a Wine/Windows path back to a POSIX path.
- *
- * - `Z:\tmp\test.c` → `/tmp/test.c`
- * - `C:\msvc6\include\stdio.h` → left unchanged (internal Wine path)
- * - Generic backslash paths → forward slashes
- */
-export declare function fromWinePath(winePath: string): string;
 //# sourceMappingURL=config.d.ts.map

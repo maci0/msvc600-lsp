@@ -37,9 +37,8 @@ exports.DEFAULT_OUTPUT_ENCODING = exports.ALL_EXTENSIONS = exports.CPP_EXTENSION
 exports.defaultConfig = defaultConfig;
 exports.validateConfig = validateConfig;
 exports.runtimeConfigEquals = runtimeConfigEquals;
-exports.toWinePath = toWinePath;
-exports.fromWinePath = fromWinePath;
 const path = __importStar(require("path"));
+const wine_path_1 = require("./wine-path");
 /**
  * Supported C/C++ file extensions for syntax checking.
  * Translation units (.c, .cpp, .cxx, .cc) are compiled directly.
@@ -49,7 +48,6 @@ const path = __importStar(require("path"));
 exports.C_EXTENSIONS = ['.c'];
 exports.CPP_EXTENSIONS = ['.cpp', '.cxx', '.cc', '.hpp', '.hxx'];
 exports.ALL_EXTENSIONS = [...exports.C_EXTENSIONS, ...exports.CPP_EXTENSIONS, '.h'];
-const WINE_MSVC_BASE = 'C:\\msvc6';
 /** CL.EXE diagnostics are ASCII-safe under Wine's UTF-8 console by default. */
 exports.DEFAULT_OUTPUT_ENCODING = 'utf8';
 /** Returns a config with sensible defaults relative to the package root. */
@@ -59,7 +57,7 @@ function defaultConfig() {
     return {
         msvcBasePath,
         clPath: path.join(msvcBasePath, 'BIN', 'CL.EXE'),
-        includePaths: [useWine ? `${WINE_MSVC_BASE}\\include` : path.join(msvcBasePath, 'INCLUDE')],
+        includePaths: [useWine ? `${wine_path_1.WINE_MSVC_BASE}\\include` : path.join(msvcBasePath, 'INCLUDE')],
         warnLevel: 4,
         additionalFlags: [],
         wineExecutable: 'wine',
@@ -134,38 +132,5 @@ function isSupportedEncoding(label) {
     catch {
         return false;
     }
-}
-/**
- * Converts a Linux/macOS filesystem path to a Wine-compatible Z:-drive path.
- *
- * Example: `/tmp/test.c` → `Z:\tmp\test.c`
- */
-function toWinePath(linuxPath) {
-    const absolute = path.resolve(linuxPath);
-    if (/^[A-Za-z]:[\\/]/.test(absolute))
-        return absolute;
-    return 'Z:' + absolute.replace(/\//g, '\\');
-}
-/**
- * Converts a Wine/Windows path back to a POSIX path.
- *
- * - `Z:\tmp\test.c` → `/tmp/test.c`
- * - `C:\msvc6\include\stdio.h` → left unchanged (internal Wine path)
- * - Generic backslash paths → forward slashes
- */
-function fromWinePath(winePath) {
-    if (/^[Zz]:/.test(winePath)) {
-        return winePath.slice(2).replace(/\\/g, '/');
-    }
-    const normalized = winePath.replace(/\//g, '\\');
-    const lower = normalized.toLowerCase();
-    if (lower === 'c:\\msvc6' || lower.startsWith('c:\\msvc6\\')) {
-        return winePath;
-    }
-    // Other Wine drive letters (A:-Y:) are internal Wine mappings — leave unchanged.
-    if (/^[A-Ya-y]:[\\/]/.test(winePath)) {
-        return winePath;
-    }
-    return winePath.replace(/\\/g, '/');
 }
 //# sourceMappingURL=config.js.map
