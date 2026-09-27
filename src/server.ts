@@ -14,11 +14,30 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { Msvc6Config, defaultConfig, validateConfig, ALL_EXTENSIONS, CPP_EXTENSIONS } from './config';
-import { syntaxCheck, stripByteOrderMark } from './compiler';
+import { CompilerSpawnError, syntaxCheck, stripByteOrderMark } from './compiler';
 import { parseDiagnostics, toLspDiagnostics } from './diagnostics';
+import {
+  SLOW_VALIDATION_MS,
+  STATUS_METHOD,
+  ServerStatus,
+  logError,
+  logInfo,
+  logWarn,
+  setLogSink,
+  validationStats,
+} from './observability';
 
 const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
+
+// Editors render window/logMessage in their own output channel; routing every
+// line through one sink keeps the format identical to what a raw stdio capture
+// sees.
+setLogSink((level, line) => {
+  if (level === 'error') connection.console.error(line);
+  else if (level === 'warn') connection.console.warn(line);
+  else connection.console.info(line);
+});
 
 let config: Msvc6Config = defaultConfig();
 let hasConfigurationCapability = false;
@@ -59,9 +78,14 @@ connection.onInitialized(() => {
   if (hasConfigurationCapability) {
     void connection.client.register(DidChangeConfigurationNotification.type, undefined).then(
       undefined,
-      (e) => connection.console.error(`Failed to register config change watcher: ${String(e)}`),
+      (e) => logError('config watcher registration failed', { error: String(e) }),
     );
   }
+  logInfo('server initialized', {
+    useWine: config.useWine,
+    clPath: config.clPath,
+    warnLevel: config.warnLevel,
+  });
 });
 
 connection.onDidChangeConfiguration((change) => {
@@ -83,11 +107,7 @@ connection.onDidChangeConfiguration((change) => {
 
   void (async () => {
     for (const d of documents.all()) {
-      try {
-        await validateDocument(d);
-      } catch (e) {
-        connection.console.error(`Validation error (config change): ${String(e)}`);
-      }
+      await validateDocument(d).catch(ignoreRejection);
     }
   })();
 });
@@ -102,9 +122,7 @@ documents.onDidChangeContent((change) => {
       pendingValidations.delete(uri);
       const doc = documents.get(uri);
       if (!doc) return;
-      validateDocument(doc).catch((e) =>
-        connection.console.error(`Validation error: ${String(e)}`),
-      );
+      validateDocument(doc).catch(ignoreRejection);
     }, DEBOUNCE_MS),
   );
 });
@@ -116,9 +134,7 @@ documents.onDidSave((change) => {
     clearTimeout(pending);
     pendingValidations.delete(uri);
   }
-  validateDocument(change.document).catch((e) =>
-    connection.console.error(`Validation error: ${String(e)}`),
-  );
+  validateDocument(change.document).catch(ignoreRejection);
 });
 
 documents.onDidClose((event) => {
@@ -178,6 +194,9 @@ async function validateDocument(textDocument: TextDocument): Promise<void> {
   const tempExt = langId === 'cpp' ? '.cpp' : '.c';
   const tempFile = path.join(os.tmpdir(), `msvc6_lsp_${randomUUID()}${tempExt}`);
 
+  const startedAt = Date.now();
+  validationStats.recordStart();
+
   try {
     fs.writeFileSync(tempFile, stripByteOrderMark(content), {
       encoding: 'utf-8',
@@ -185,15 +204,45 @@ async function validateDocument(textDocument: TextDocument): Promise<void> {
     });
 
     const result = await syntaxCheck(config, tempFile, { signal: abort.signal });
+    const durationMs = Date.now() - startedAt;
 
     if (validationSeq.get(uri) !== seq) return;
+
+    if (result.timedOut) {
+      validationStats.recordFailure('timeout', 'CL.EXE exceeded the timeout and was killed');
+      logError('validation timed out', {
+        uri,
+        durationMs,
+        clPath: config.clPath,
+        wineExecutable: config.useWine ? config.wineExecutable : undefined,
+      });
+      connection.sendDiagnostics({ uri, diagnostics: [] });
+      return;
+    }
 
     const parsed = parseDiagnostics(result.rawOutput);
     const diagnostics = toLspDiagnostics(parsed, tempFile);
 
+    validationStats.recordCompletion(durationMs, result.truncated);
+
+    if (result.truncated) {
+      logWarn('validation output truncated, diagnostics are incomplete', {
+        uri,
+        durationMs,
+        diagnostics: diagnostics.length,
+      });
+    } else if (durationMs >= SLOW_VALIDATION_MS) {
+      logInfo('slow validation', { uri, durationMs, diagnostics: diagnostics.length });
+    }
+
     connection.sendDiagnostics({ uri, diagnostics });
   } catch (e) {
-    if (abort.signal.aborted) return;
+    if (abort.signal.aborted) {
+      validationStats.recordAbort();
+      return;
+    }
+    const durationMs = Date.now() - startedAt;
+    recordFailure(uri, e, durationMs);
     if (validationSeq.get(uri) === seq) {
       connection.sendDiagnostics({ uri, diagnostics: [] });
     }
@@ -210,8 +259,74 @@ async function validateDocument(textDocument: TextDocument): Promise<void> {
   }
 }
 
+/**
+ * Records and logs why a check produced no diagnostics, naming the dependency
+ * that failed so a Wine or CL.EXE problem is distinguishable from a compiler
+ * error in the buffer.
+ */
+function recordFailure(uri: string, error: unknown, durationMs: number): void {
+  const fields = {
+    uri,
+    durationMs,
+    error: error instanceof Error ? error.message : String(error),
+  };
+
+  if (error instanceof CompilerSpawnError) {
+    validationStats.recordFailure('spawn', error.message);
+    logError('compiler could not be started', {
+      ...fields,
+      code: error.code,
+      executable: error.executable,
+    });
+    return;
+  }
+
+  validationStats.recordFailure('error', fields.error);
+  logError('validation failed', fields);
+}
+
+/**
+ * Attaches to a rejected `validateDocument` so the failure is not reported as
+ * an unhandled rejection. {@link recordFailure} already logged and counted it.
+ */
+function ignoreRejection(): void {}
+
 documents.listen(connection);
 connection.listen();
+
+connection.onRequest(STATUS_METHOD, (): ServerStatus => {
+  const stats = validationStats.snapshot();
+  return {
+    uptimeMs: stats.uptimeMs,
+    validations: {
+      started: stats.started,
+      completed: stats.completed,
+      failed: stats.failed,
+      aborted: stats.aborted,
+      timedOut: stats.timedOut,
+      truncated: stats.truncated,
+      totalDurationMs: stats.totalDurationMs,
+      maxDurationMs: stats.maxDurationMs,
+      lastDurationMs: stats.lastDurationMs,
+      lastSuccessAt: stats.lastSuccessAt,
+      lastFailureAt: stats.lastFailureAt,
+      lastFailure: stats.lastFailure,
+    },
+    compiler: {
+      clPath: config.clPath,
+      wineExecutable: config.wineExecutable,
+      useWine: config.useWine,
+    },
+  };
+});
+
+/**
+ * A rejection or throw outside any request handler would otherwise be silent
+ * apart from the runtime's own stderr output, which the editor does not show.
+ */
+process.on('unhandledRejection', (reason) => {
+  logError('unhandled rejection', { error: String(reason) });
+});
 
 /** Returns the current live config — typed `Readonly` to prevent accidental mutation. */
 function getConfig(): Readonly<Msvc6Config> {

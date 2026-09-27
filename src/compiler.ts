@@ -14,6 +14,33 @@ export interface CompileResult {
   rawOutput: string;
   /** True when output was truncated (maxBuffer exceeded). Diagnostics may be incomplete. */
   truncated: boolean;
+  /** True when the child was killed for exceeding {@link DEFAULT_TIMEOUT_MS}. */
+  timedOut: boolean;
+  /** Wall-clock duration of the child process, in milliseconds. */
+  durationMs: number;
+}
+
+/** Kills a hung CL.EXE, including under Wine where SIGTERM is unreliable. */
+export const DEFAULT_TIMEOUT_MS = 30_000;
+
+/** Output ceiling for the child process; the tail of the diagnostic list is lost past it. */
+const MAX_OUTPUT_BYTES = 1024 * 1024;
+
+/**
+ * A compiler that could not be started at all: CL.EXE or Wine is missing,
+ * not executable, or the path is wrong. Distinct from a compile failure, since
+ * no diagnostics exist and the server cannot check anything until it is fixed.
+ */
+export class CompilerSpawnError extends Error {
+  readonly code: string;
+  readonly executable: string;
+
+  constructor(executable: string, code: string) {
+    super(`Failed to execute ${executable}: ${code}`);
+    this.name = 'CompilerSpawnError';
+    this.code = code;
+    this.executable = executable;
+  }
 }
 
 /**
@@ -80,7 +107,7 @@ function decodeOutput(bytes: Buffer, encoding: string): string {
 export function syntaxCheck(
   config: Msvc6Config,
   filePath: string,
-  opts: { signal?: AbortSignal } = {},
+  opts: { signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<CompileResult> {
   return new Promise((resolve, reject) => {
     const args = buildArgs(config, filePath);
@@ -91,6 +118,8 @@ export function syntaxCheck(
       ? { ...process.env, WINEDEBUG: '-all' }
       : { ...process.env };
 
+    const startedAt = Date.now();
+
     execFile(
       executable,
       execArgs,
@@ -99,13 +128,14 @@ export function syntaxCheck(
       // below with the configured output encoding, not assumed to be UTF-8.
       {
         env,
-        timeout: 30000,
-        maxBuffer: 1024 * 1024,
+        timeout: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        maxBuffer: MAX_OUTPUT_BYTES,
         signal: opts.signal,
         killSignal: 'SIGKILL',
         encoding: 'buffer',
       },
       (error, stdoutBytes, stderrBytes) => {
+        const durationMs = Date.now() - startedAt;
         const stdout = decodeOutput(stdoutBytes, config.outputEncoding);
         const stderr = decodeOutput(stderrBytes, config.outputEncoding);
 
@@ -113,7 +143,7 @@ export function syntaxCheck(
           const isSpawnFailure =
             error.code === 'ENOENT' || error.code === 'EACCES' || error.code === 'ENOTDIR';
           if (isSpawnFailure && !stdout && !stderr) {
-            reject(new Error(`Failed to execute ${executable}: ${error.code}`));
+            reject(new CompilerSpawnError(executable, error.code));
             return;
           }
           if (error.code === 'ABORT_ERR') {
@@ -122,13 +152,17 @@ export function syntaxCheck(
           }
         }
 
+        // execFile reports a timeout by killing the child: `killed` is set and
+        // `code` stays null, so without this the run reads as a clean exit.
+        // The maxBuffer kill sets `killed` too, hence the separate flag first.
         const truncated =
           error != null &&
           typeof error.code === 'string' &&
           error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
+        const timedOut = !truncated && (error as { killed?: boolean } | null)?.killed === true;
         const exitCode = getExitCode(error);
         const rawOutput = stdout + '\n' + stderr;
-        resolve({ stdout, stderr, exitCode, rawOutput, truncated });
+        resolve({ stdout, stderr, exitCode, rawOutput, truncated, timedOut, durationMs });
       },
     );
   });

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import * as path from 'path';
-import { syntaxCheck, syntaxCheckContent, buildArgs, stripByteOrderMark } from '../src/compiler';
+import { syntaxCheck, syntaxCheckContent, buildArgs, stripByteOrderMark, CompilerSpawnError } from '../src/compiler';
 import { Msvc6Config } from '../src/config';
 import { CL_EXE, MSVC_ROOT, describeWithToolchain } from './helpers/toolchain';
 
@@ -173,6 +173,49 @@ describe('syntaxCheck with useWine: false', () => {
       };
       const result = await syntaxCheck(cfg, path.join(FIXTURES, 'valid.c'));
       expect(result.stdout).toBe('Z:\\tmp\\caf\uFFFD.c');
+    },
+  );
+});
+
+describe('syntaxCheck with useWine: false — result metadata', () => {
+  const local = (clPath: string) => ({ ...testConfig(), useWine: false, clPath });
+
+  it.runIf(process.platform !== 'win32')(
+    'reports duration and no timeout for a run that returns',
+    async () => {
+      const result = await syntaxCheck(
+        local(path.join(FIXTURES, 'emit_cp1252.mjs')),
+        path.join(FIXTURES, 'valid.c'),
+      );
+      expect(result.timedOut).toBe(false);
+      expect(result.durationMs).toBeGreaterThanOrEqual(0);
+    },
+  );
+
+  it.runIf(process.platform !== 'win32')(
+    'flags a killed child as timed out instead of a clean run',
+    async () => {
+      const result = await syntaxCheck(
+        local(path.join(FIXTURES, 'stall.mjs')),
+        path.join(FIXTURES, 'valid.c'),
+        { timeoutMs: 250 },
+      );
+      expect(result.timedOut).toBe(true);
+      expect(result.durationMs).toBeGreaterThanOrEqual(200);
+    },
+  );
+
+  it.runIf(process.platform !== 'win32')(
+    'rejects with CompilerSpawnError carrying the failing executable',
+    async () => {
+      const cfg = local('/nonexistent/CL.EXE');
+      await expect(syntaxCheck(cfg, path.join(FIXTURES, 'valid.c'))).rejects.toThrow(
+        CompilerSpawnError,
+      );
+      await expect(syntaxCheck(cfg, path.join(FIXTURES, 'valid.c'))).rejects.toMatchObject({
+        code: 'ENOENT',
+        executable: '/nonexistent/CL.EXE',
+      });
     },
   );
 });

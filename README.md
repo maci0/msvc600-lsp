@@ -71,10 +71,11 @@ Other fields (especially `additionalFlags`) cannot be changed at runtime, so a r
 
 ```
 src/
-├── config.ts       # Configuration types, validation, Wine path conversion
-├── compiler.ts     # CL.EXE invocation (syntax-check mode)
-├── diagnostics.ts  # MSVC output parser → LSP Diagnostic conversion
-└── server.ts       # LSP server lifecycle, debouncing, abort handling
+├── config.ts         # Configuration types, validation, Wine path conversion
+├── compiler.ts       # CL.EXE invocation (syntax-check mode)
+├── diagnostics.ts    # MSVC output parser → LSP Diagnostic conversion
+├── observability.ts  # Structured log lines, repeat suppression, validation counters
+└── server.ts         # LSP server lifecycle, debouncing, abort handling
 ```
 
 **Key design decisions:**
@@ -82,6 +83,22 @@ src/
 - **Temp files + abort controllers**: Each validation writes to a unique temp file and tracks an `AbortController`. New edits abort stale in-flight checks.
 - **Sequence numbers**: A per-URI counter discards results from stale validations that complete after a newer one started.
 - **Security boundary**: Runtime config changes cannot touch `additionalFlags` or the executable paths, which are fixed at initialization. That limits a notification to include paths and warning level; it does not constrain what the client sends at startup.
+
+## Troubleshooting
+
+Every event the server emits is one `window/logMessage` line in the editor's LSP output channel, formatted as `<ISO timestamp> <level> <message> key=value ...`. Levels are `error` for a check that produced nothing, `warn` for output that was truncated, and `info` for startup, slow checks, and nothing else. Identical lines are collapsed within a minute and the next occurrence carries `repeat=<n>`, so a CL.EXE that cannot be spawned logs once instead of once per keystroke.
+
+Send the `msvc6/status` request to read the counters for the running server:
+
+```jsonc
+// request
+{ "jsonrpc": "2.0", "id": 1, "method": "msvc6/status", "params": {} }
+// result: uptime, and validations { started, completed, failed, aborted,
+// timedOut, truncated, total/max/last duration, last success and failure
+// timestamps, last failure }, plus the configured clPath and wineExecutable
+```
+
+The two failures worth separating are `compiler could not be started` (the log carries `code=ENOENT|EACCES|ENOTDIR` and the `executable` that failed, so a missing Wine prefix is distinct from a missing CL.EXE) and `validation timed out` (CL.EXE exceeded 30 s and was killed; the buffer is not checked, and its diagnostics are cleared).
 
 ## Supported File Types
 
