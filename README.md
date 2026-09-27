@@ -53,16 +53,21 @@ Options:
       --stdio           communicate over stdin/stdout
       --node-ipc        communicate over the Node IPC channel
       --socket=<port>   connect to a TCP server on <port>
-  -h, --help            print help and exit
+  -h, --help            print this help and exit
   -V, --version         print the version and exit
 ```
 
+`--help` also lists every `MSVC600_*` variable and ends with the running version, so it is the
+one command to read when setting a client up.
+
 The server has no default transport, so a bare `msvc600-lsp` is a usage error rather than a
-crash. Exit codes: `0` success, `1` the server failed to start, `2` bad argument. `--help` and
-`--version` write to stdout; a usage error writes to stderr and leaves stdout empty, so a script
-capturing stdout never reads an error page as server output. Nothing else is configurable on the
-command line: configuration comes from the environment and from `initializationOptions`, described
-below.
+crash, and naming two transports is a usage error rather than a silent choice of the first.
+`--socket` takes a port from 1 to 65535; anything else is rejected before the connection is
+opened, because a bad port otherwise surfaces as a stack trace and exit 1. Exit codes: `0`
+success, `1` the server failed to start, `2` bad argument. `--help` and `--version` write to
+stdout; a usage error writes to stderr and leaves stdout empty, so a script capturing stdout never
+reads an error page as server output. Nothing else is configurable on the command line:
+configuration comes from the environment and from `initializationOptions`, described below.
 
 ### Configuration
 

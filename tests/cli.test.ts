@@ -72,6 +72,32 @@ describe('parseArgs', () => {
     expect(out.code).toBe(USAGE_EXIT_CODE);
     expect(out.stderr).toContain("--socket needs a port number, got 'notaport'");
   });
+
+  it('rejects a port outside the range the transport can open', () => {
+    for (const argv of [['--socket=0'], ['--socket=99999']]) {
+      const out = exitOf(argv);
+      expect(out.code).toBe(USAGE_EXIT_CODE);
+      expect(out.stdout).toBe('');
+      expect(out.stderr).toContain('--socket needs a port between 1 and 65535');
+    }
+  });
+
+  it('rejects two transports instead of letting the first one win silently', () => {
+    for (const argv of [
+      ['--stdio', '--node-ipc'],
+      ['--stdio', '--socket=6009'],
+      ['--socket=6009', '--stdio'],
+    ]) {
+      const out = exitOf(argv);
+      expect(out.code).toBe(USAGE_EXIT_CODE);
+      expect(out.stdout).toBe('');
+      expect(out.stderr).toContain('more than one transport given');
+    }
+  });
+
+  it('accepts the same transport named twice', () => {
+    expect(parseArgs(['--stdio', '--stdio'], VERSION)).toEqual({ kind: 'serve' });
+  });
 });
 
 describe('readVersion', () => {

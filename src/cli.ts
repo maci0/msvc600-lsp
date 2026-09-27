@@ -17,10 +17,15 @@ export type CliOutcome =
   | { kind: 'serve' }
   | { kind: 'exit'; code: number; stdout: string; stderr: string };
 
+/** Lowest and highest TCP port the LSP transport can be pointed at. */
+const MIN_PORT = 1;
+const MAX_PORT = 65535;
+
 const USAGE = `Usage: ${PROGRAM} [options]
 
 Language server that syntax-checks C/C++ buffers with Microsoft Visual C++ 6.0.
 It speaks LSP over a pipe and writes nothing to stdout except protocol frames.
+Exactly one transport option is required; naming two is a usage error.
 
 Options:
       --stdio           communicate over stdin/stdout
@@ -79,13 +84,27 @@ function usageError(problem: string): CliOutcome {
  * are accepted; anything else is a usage error rather than an argument the
  * server reads past, so a typo cannot start a server configured differently
  * from what was asked for.
+ *
+ * A port is range-checked here because the transport the LSP library opens
+ * afterwards reports an out-of-range port as a stack trace and exit 1, which
+ * would tell a script the server failed rather than that its command line was
+ * wrong.
  */
 export function parseArgs(argv: readonly string[], version: string): CliOutcome {
-  let transport = false;
+  let transport: string | null = null;
+
+  const select = (name: string): CliOutcome | null => {
+    if (transport === null || transport === name) {
+      transport = name;
+      return null;
+    }
+    return usageError(`more than one transport given ('${transport}' and '${name}')`);
+  };
 
   for (const arg of argv) {
     if (arg === '--stdio' || arg === '--node-ipc') {
-      transport = true;
+      const clash = select(arg);
+      if (clash) return clash;
       continue;
     }
     if (arg === '--help' || arg === '-h') {
@@ -99,7 +118,12 @@ export function parseArgs(argv: readonly string[], version: string): CliOutcome 
       if (!/^\d+$/.test(port)) {
         return usageError(`--socket needs a port number, got '${port}'`);
       }
-      transport = true;
+      const value = Number(port);
+      if (value < MIN_PORT || value > MAX_PORT) {
+        return usageError(`--socket needs a port between ${MIN_PORT} and ${MAX_PORT}, got '${port}'`);
+      }
+      const clash = select(arg);
+      if (clash) return clash;
       continue;
     }
     if (arg.startsWith('-')) {
@@ -110,7 +134,7 @@ export function parseArgs(argv: readonly string[], version: string): CliOutcome 
 
   // The server has no default transport to fall back on, so a bare invocation
   // names the three that exist rather than failing inside the LSP library.
-  if (!transport) {
+  if (transport === null) {
     return usageError('no transport selected; pass --stdio, --node-ipc, or --socket=<port>');
   }
 

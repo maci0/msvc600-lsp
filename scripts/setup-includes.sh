@@ -60,7 +60,7 @@ fi
 
 for required in INCLUDE LIB BIN; do
     if [ ! -d "$MSVC_ROOT/$required" ]; then
-        echo "ERROR: $MSVC_ROOT/$required is missing; the overlay would be incomplete"
+        echo "ERROR: $MSVC_ROOT/$required is missing; the overlay would be incomplete" >&2
         exit 1
     fi
 done

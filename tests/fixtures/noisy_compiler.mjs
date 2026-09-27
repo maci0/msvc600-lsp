@@ -8,6 +8,6 @@ import { writeSync } from 'fs';
 const LINE = 'Z:\\tmp\\noisy.c(1) : error C2065: undeclared identifier\n';
 const LINES = 2048;
 for (let i = 0; i < LINES; i++) {
-  writeSync(LINE);
+  writeSync(1, LINE);
 }
 process.exit(1);

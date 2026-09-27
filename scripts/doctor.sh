@@ -18,6 +18,11 @@ EOF
 
 case "${1:-}" in
 -h | --help)
+    if [ $# -gt 1 ]; then
+        echo "doctor.sh: unexpected argument '$2'" >&2
+        usage >&2
+        exit 2
+    fi
     usage
     exit 0
     ;;
@@ -29,6 +34,14 @@ case "${1:-}" in
     exit 2
     ;;
 esac
+
+# Only $1 was examined above, so a second argument is rejected here rather
+# than read past, which would let a mistyped flag run a check nobody asked for.
+if [ $# -gt 1 ]; then
+    echo "doctor.sh: unexpected argument '$2'" >&2
+    usage >&2
+    exit 2
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
