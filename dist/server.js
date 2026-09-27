@@ -47,6 +47,7 @@ const tempfile_1 = require("./tempfile");
 const diagnostics_1 = require("./diagnostics");
 const logging_1 = require("./logging");
 const validation_state_1 = require("./validation-state");
+const scheduler_1 = require("./scheduler");
 const task_queue_1 = require("./task-queue");
 const cli_1 = require("./cli");
 // Before anything else: --help, --version, and a bad flag must not reach the
@@ -67,17 +68,9 @@ const startupIssues = (0, config_1.formatIssues)('MSVC600_*', envConfig.issues);
 let hasConfigurationCapability = false;
 /** Decides which validation result per URI is allowed to reach the client. */
 const validationSequencer = new validation_state_1.ValidationSequencer();
-/** Per-URI debounce timers for `onDidChangeContent`. */
-const pendingValidations = new Map();
+/** Coalesces edit bursts into one check per document. */
 const DEBOUNCE_MS = 300;
-/** Drops a document's pending debounce timer, if one is still waiting. */
-function clearPendingValidation(uri) {
-    const pending = pendingValidations.get(uri);
-    if (!pending)
-        return;
-    clearTimeout(pending);
-    pendingValidations.delete(uri);
-}
+const validationDebouncer = (0, scheduler_1.createDebouncer)(scheduler_1.realScheduler, DEBOUNCE_MS);
 /**
  * Validation tasks, one per document URI. A new task for a URI aborts the
  * previous one, so a superseded edit never reaches the compiler.
@@ -180,31 +173,27 @@ connection.onDidChangeConfiguration((change) => {
     // A client that repoints includePaths controls which headers every open
     // file is preprocessed against, so the change is recorded.
     connection.console.info((0, logging_1.sanitizeForLog)(`msvc6 configuration changed: includePaths=${JSON.stringify(config.includePaths)}, warnLevel=${config.warnLevel}`));
-    for (const t of pendingValidations.values())
-        clearTimeout(t);
-    pendingValidations.clear();
+    validationDebouncer.cancelAll();
     // The queue bounds how many of these become CL.EXE children at once.
     for (const d of documents.all())
         scheduleValidation(d);
 });
 documents.onDidChangeContent((change) => {
     const uri = change.document.uri;
-    clearPendingValidation(uri);
-    pendingValidations.set(uri, setTimeout(() => {
-        pendingValidations.delete(uri);
+    validationDebouncer.schedule(uri, () => {
         const doc = documents.get(uri);
         if (!doc)
             return;
         scheduleValidation(doc);
-    }, DEBOUNCE_MS));
+    });
 });
 documents.onDidSave((change) => {
-    clearPendingValidation(change.document.uri);
+    validationDebouncer.cancel(change.document.uri);
     scheduleValidation(change.document);
 });
 documents.onDidClose((event) => {
     const uri = event.document.uri;
-    clearPendingValidation(uri);
+    validationDebouncer.cancel(uri);
     validationQueue.cancel(uri);
     validationSequencer.close(uri);
     connection.sendDiagnostics({ uri, diagnostics: [] });
@@ -216,9 +205,7 @@ connection.onShutdown(async () => {
     // session, and any CL.EXE child still running would be orphaned onto the
     // machine when the process exits. Draining lets the aborted checks unlink
     // their temp files, which hold the document text.
-    for (const t of pendingValidations.values())
-        clearTimeout(t);
-    pendingValidations.clear();
+    validationDebouncer.cancelAll();
     validationQueue.close();
     await Promise.race([
         validationQueue.drained(),
@@ -275,14 +262,14 @@ async function runValidation(uri, handle, content, ext, signal) {
         if (!handle.isCurrent())
             return;
         if (result.timedOut) {
-            publishCheckFailure(uri, `CL.EXE did not finish within ${compiler_1.COMPILE_TIMEOUT_MS} ms and was killed; ` +
+            publishCheckFailure(uri, `CL.EXE did not finish within ${config.checkTimeoutMs} ms and was killed; ` +
                 `diagnostics for this file are unavailable, not empty.`);
             return;
         }
         const parsed = (0, diagnostics_1.parseDiagnostics)(result.rawOutput);
         connection.sendDiagnostics({ uri, diagnostics: (0, diagnostics_1.toLspDiagnostics)(parsed, tempFile) });
         if (result.truncated) {
-            connection.console.error((0, logging_1.sanitizeForLog)(`CL.EXE output for ${uri} exceeded ${compiler_1.MAX_OUTPUT_BYTES} bytes; ` +
+            connection.console.error((0, logging_1.sanitizeForLog)(`CL.EXE output for ${uri} exceeded ${config.maxOutputBytes} bytes; ` +
                 'reported diagnostics are incomplete'));
         }
     }
@@ -305,7 +292,7 @@ async function runValidation(uri, handle, content, ext, signal) {
             uri,
             diagnostics: [(0, diagnostics_1.toFailureDiagnostic)(`Syntax check failed: ${errorMessage(e)}`)],
         });
-        connection.console.error(`Validation error (${uri}): ${String(e)}`);
+        logValidationError(`Validation error (${uri})`, e);
     }
     finally {
         if (tempFile !== undefined) {

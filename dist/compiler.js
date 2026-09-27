@@ -101,13 +101,6 @@ function getExitCode(error) {
     return 1;
 }
 /**
- * Decodes CL.EXE output bytes. A `TextDecoder` never throws on malformed
- * input, so undecodable bytes become U+FFFD rather than aborting the check.
- */
-function decodeOutput(bytes, decoder) {
-    return decoder.decode(bytes);
-}
-/**
  * Whether the child was killed by the exec timeout rather than by the caller.
  * A timeout kill carries no string `code` (it is `null`) and no `status`, so
  * only `killed` distinguishes it from an ordinary non-zero exit.
@@ -171,8 +164,6 @@ function runCheck(config, filePath, opts) {
         }
         (0, child_process_1.execFile)(executable, execArgs, 
         // killSignal: SIGKILL because Wine ignores SIGTERM reliably.
-        // timeout and maxBuffer come from the config so a user can bound a
-        // runaway Wine or a chatty CL.EXE per machine.
         // encoding: 'buffer' keeps the raw code-page bytes; they are decoded
         // below with the configured output encoding, not assumed to be UTF-8.
         // timeout and maxBuffer come from the config, so a client that raises or
@@ -185,8 +176,10 @@ function runCheck(config, filePath, opts) {
             killSignal: 'SIGKILL',
             encoding: 'buffer',
         }, (error, stdoutBytes, stderrBytes) => {
-            const stdout = decodeOutput(stdoutBytes, decoder);
-            const stderr = decodeOutput(stderrBytes, decoder);
+            // A TextDecoder never throws on malformed input, so undecodable bytes
+            // become U+FFFD rather than aborting the check.
+            const stdout = decoder.decode(stdoutBytes);
+            const stderr = decoder.decode(stderrBytes);
             if (error) {
                 const isSpawnFailure = error.code === 'ENOENT' || error.code === 'EACCES' || error.code === 'ENOTDIR';
                 if (isSpawnFailure && !stdout && !stderr) {

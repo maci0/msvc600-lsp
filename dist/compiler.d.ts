@@ -28,7 +28,7 @@ export interface CompileResult {
     /** True when output was truncated (maxBuffer exceeded). Diagnostics may be incomplete. */
     truncated: boolean;
     /**
-     * True when CL.EXE was killed after {@link COMPILE_TIMEOUT_MS}. The exit code
+     * True when CL.EXE was killed after `config.checkTimeoutMs`. The exit code
      * and output are then meaningless: no diagnostic in `rawOutput` was produced
      * by a completed run, and a missing diagnostic means the check timed out,
      * not that the file is clean.

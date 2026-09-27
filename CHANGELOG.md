@@ -28,6 +28,12 @@ package version, not a published artifact.
 - At most two CL.EXE children run at once. The server scheduled validations through a queue of
   its own while the compiler spawned through a second, looser limit, so the documented
   behavior and the effective one disagreed.
+- A timed-out or truncated check reported the built-in 30 s and 1 MiB caps in its message even
+  when `checkTimeoutMs` and `maxOutputBytes` were set to something else.
+- `src/concurrency.ts` was removed while `src/compiler.ts` still imported it, so the type check
+  failed on a missing module.
+- The noisy-output test fixture wrote to no file descriptor, so the stand-in compiler exited
+  before emitting anything and the truncation path was never exercised.
 
 ## [0.1.0] - 2026-09-27
 

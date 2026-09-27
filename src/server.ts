@@ -27,8 +27,6 @@ import {
 } from './config';
 import {
   syntaxCheck,
-  COMPILE_TIMEOUT_MS,
-  MAX_OUTPUT_BYTES,
   MAX_CONCURRENT_CHECKS,
 } from './compiler';
 import {
@@ -39,6 +37,7 @@ import {
 import { parseDiagnostics, toLspDiagnostics, toFailureDiagnostic, LSP_UINT_MAX } from './diagnostics';
 import { sanitizeForLog } from './logging';
 import { ValidationSequencer, ValidationHandle } from './validation-state';
+import { createDebouncer, realScheduler } from './scheduler';
 import { TaskQueue } from './task-queue';
 import { runCli } from './cli';
 
@@ -64,18 +63,10 @@ let hasConfigurationCapability = false;
 /** Decides which validation result per URI is allowed to reach the client. */
 const validationSequencer = new ValidationSequencer();
 
-/** Per-URI debounce timers for `onDidChangeContent`. */
-const pendingValidations = new Map<string, NodeJS.Timeout>();
-
+/** Coalesces edit bursts into one check per document. */
 const DEBOUNCE_MS = 300;
 
-/** Drops a document's pending debounce timer, if one is still waiting. */
-function clearPendingValidation(uri: string): void {
-  const pending = pendingValidations.get(uri);
-  if (!pending) return;
-  clearTimeout(pending);
-  pendingValidations.delete(uri);
-}
+const validationDebouncer = createDebouncer(realScheduler, DEBOUNCE_MS);
 
 /**
  * Validation tasks, one per document URI. A new task for a URI aborts the
@@ -205,8 +196,7 @@ connection.onDidChangeConfiguration((change) => {
     ),
   );
 
-  for (const t of pendingValidations.values()) clearTimeout(t);
-  pendingValidations.clear();
+  validationDebouncer.cancelAll();
 
   // The queue bounds how many of these become CL.EXE children at once.
   for (const d of documents.all()) scheduleValidation(d);
@@ -214,26 +204,21 @@ connection.onDidChangeConfiguration((change) => {
 
 documents.onDidChangeContent((change) => {
   const uri = change.document.uri;
-  clearPendingValidation(uri);
-  pendingValidations.set(
-    uri,
-    setTimeout(() => {
-      pendingValidations.delete(uri);
-      const doc = documents.get(uri);
-      if (!doc) return;
-      scheduleValidation(doc);
-    }, DEBOUNCE_MS),
-  );
+  validationDebouncer.schedule(uri, () => {
+    const doc = documents.get(uri);
+    if (!doc) return;
+    scheduleValidation(doc);
+  });
 });
 
 documents.onDidSave((change) => {
-  clearPendingValidation(change.document.uri);
+  validationDebouncer.cancel(change.document.uri);
   scheduleValidation(change.document);
 });
 
 documents.onDidClose((event) => {
   const uri = event.document.uri;
-  clearPendingValidation(uri);
+  validationDebouncer.cancel(uri);
   validationQueue.cancel(uri);
   validationSequencer.close(uri);
   connection.sendDiagnostics({ uri, diagnostics: [] });
@@ -247,8 +232,7 @@ connection.onShutdown(async () => {
   // session, and any CL.EXE child still running would be orphaned onto the
   // machine when the process exits. Draining lets the aborted checks unlink
   // their temp files, which hold the document text.
-  for (const t of pendingValidations.values()) clearTimeout(t);
-  pendingValidations.clear();
+  validationDebouncer.cancelAll();
   validationQueue.close();
   await Promise.race([
     validationQueue.drained(),
@@ -323,7 +307,7 @@ async function runValidation(
     if (result.timedOut) {
       publishCheckFailure(
         uri,
-        `CL.EXE did not finish within ${COMPILE_TIMEOUT_MS} ms and was killed; ` +
+        `CL.EXE did not finish within ${config.checkTimeoutMs} ms and was killed; ` +
           `diagnostics for this file are unavailable, not empty.`,
       );
       return;
@@ -335,7 +319,7 @@ async function runValidation(
     if (result.truncated) {
       connection.console.error(
         sanitizeForLog(
-          `CL.EXE output for ${uri} exceeded ${MAX_OUTPUT_BYTES} bytes; ` +
+          `CL.EXE output for ${uri} exceeded ${config.maxOutputBytes} bytes; ` +
             'reported diagnostics are incomplete',
         ),
       );
@@ -360,7 +344,7 @@ async function runValidation(
       uri,
       diagnostics: [toFailureDiagnostic(`Syntax check failed: ${errorMessage(e)}`)],
     });
-    connection.console.error(`Validation error (${uri}): ${String(e)}`);
+    logValidationError(`Validation error (${uri})`, e);
   } finally {
     if (tempFile !== undefined) {
       try {
