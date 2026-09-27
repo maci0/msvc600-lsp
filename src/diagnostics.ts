@@ -4,7 +4,7 @@ import {
   Range,
   Position,
 } from 'vscode-languageserver-protocol';
-import { fromWinePath } from './config';
+import { fromWinePath } from './wine-path';
 
 /** A diagnostic parsed from raw CL.EXE text output. */
 export interface ParsedDiagnostic {
@@ -129,8 +129,7 @@ export function normalizeForComparison(filePath: string): string {
 /**
  * Groups diagnostics by normalized file path for batch processing.
  *
- * **Public API** — not used internally by the LSP server, but exported for
- * programmatic consumers who need to process diagnostics per-file.
+ * Exported for the test suite; the server filters to a single file instead.
  */
 export function groupByFile(
   diagnostics: ParsedDiagnostic[],

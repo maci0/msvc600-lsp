@@ -3,7 +3,8 @@ import { randomUUID } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { Msvc6Config, CPP_EXTENSIONS, C_EXTENSIONS, toWinePath } from './config';
+import { Msvc6Config, CPP_EXTENSIONS, C_EXTENSIONS } from './config';
+import { toWinePath } from './wine-path';
 
 /** Result of a CL.EXE syntax-check invocation. */
 export interface CompileResult {
@@ -147,9 +148,8 @@ export function stripByteOrderMark(content: string): string {
  * Writes `content` to a temp file and runs a syntax check on it.
  * The temp file is cleaned up after the check completes.
  *
- * **Public API** — not used internally by the LSP server (which manages its
- * own temp files for abort/stale-result handling), but exported for
- * programmatic consumers who want a simpler one-shot interface.
+ * Exported for the test suite; the server manages its own temp files so it
+ * can abort stale checks.
  */
 export async function syntaxCheckContent(
   config: Msvc6Config,

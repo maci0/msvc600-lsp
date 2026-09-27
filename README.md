@@ -71,7 +71,8 @@ Other fields (especially `additionalFlags`) cannot be changed at runtime, so a r
 
 ```
 src/
-├── config.ts       # Configuration types, validation, Wine path conversion
+├── config.ts       # Configuration types and validation
+├── wine-path.ts    # POSIX ↔ Wine path conversion
 ├── compiler.ts     # CL.EXE invocation (syntax-check mode)
 ├── diagnostics.ts  # MSVC output parser → LSP Diagnostic conversion
 └── server.ts       # LSP server lifecycle, debouncing, abort handling

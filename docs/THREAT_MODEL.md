@@ -14,7 +14,7 @@ speak the stdio channel, and who controls the command line that reaches
 | # | Threat | Boundary | Impact | Existing control |
 |---|--------|----------|--------|------------------|
 | 1 | Initialization options choose the executable and the flags | client to server (initializationOptions) | Arbitrary program execution and file writes as the editing user | None. Deliberate, but undocumented in README |
-| 2 | A hostile client sets `includePaths` to a directory it controls | server to CL.EXE | Header shadowing turns any open C/C++ file into attacker-chosen compile input | `validateConfig` type checks only (`src/config.ts:76-81`) |
+| 2 | A hostile client sets `includePaths` to a directory it controls | server to CL.EXE | Header shadowing turns any open C/C++ file into attacker-chosen compile input | `validateConfig` type checks only (`src/config.ts:75-80`) |
 | 3 | `didChangeConfiguration` revalidates every open document, no concurrency cap | client to server | Process and memory exhaustion, editor stall | Debounce and abort per URI only (`src/server.ts:84-92`) |
 | 4 | Document text is written to a shared temp directory | server to filesystem | Source code exposure to other local users; temp leak on crash | `0o600` mode and random names (`src/server.ts:179-182`) |
 | 5 | `CL.EXE` stdout is parsed with a regex and republished to the editor | compiler to editor | Malformed or hostile output reaching the UI; diagnostic spoofing | File-path filter to the temp file only (`src/diagnostics.ts:97`) |
@@ -36,7 +36,7 @@ listener in the tree.
 | `textDocument/didClose` | `src/server.ts:124` | Document identity |
 | Document URI (used to pick the extension) | `src/server.ts:144` | Client-supplied string, parsed with `URI.parse` |
 | `CL.EXE` stdout and stderr | `src/diagnostics.ts:41` | Compiler output parsed by regex |
-| Process environment | `src/compiler.ts:82` | Inherited in full; the server only adds `WINEDEBUG=-all` |
+| Process environment | `src/compiler.ts:91-93` | Inherited in full; the server only adds `WINEDEBUG=-all` |
 | `bun run setup` | `scripts/setup-includes.sh:10` | Writes to `$HOME/.wine/drive_c/msvc6` |
 
 No admin port, no debug endpoint, no default service. The only runtime
@@ -51,10 +51,10 @@ dependency surface is the four `vscode-languageserver*` packages and
    deployment, not code: the server must be launched by the user's editor and
    not exposed as a service.
 2. **Server to `CL.EXE`.** `execFile` with an argument vector
-   (`src/compiler.ts:86`). No shell, so no metacharacter injection. The
-   argument vector is assembled from config in `src/compiler.ts:23-46`.
+   (`src/compiler.ts:95`). No shell, so no metacharacter injection. The
+   argument vector is assembled from config in `src/compiler.ts:24-47`.
 3. **Server to Wine.** On non-Windows the config-supplied `wineExecutable` is
-   the program that is actually exec'd (`src/compiler.ts:79-80`).
+   the program that is actually exec'd (`src/compiler.ts:88-89`).
 4. **Server to temp filesystem.** Full document text at `os.tmpdir()`
    (`src/server.ts:179-182`).
 5. **Compiler output to editor.** Compiled text is turned into diagnostics and
@@ -79,13 +79,13 @@ dependency surface is the four `vscode-languageserver*` packages and
 
 - *Elevation of privilege.* `initializationOptions` accepts `clPath`,
   `wineExecutable`, and `additionalFlags`
-  (`src/config.ts:73-75`, `src/config.ts:90-102`). A client that reaches the
+  (`src/config.ts:72-74`, `src/config.ts:89-101`). A client that reaches the
   stdio channel picks which binary runs and can pass flags such as `/Fo` or
   `/Fe`, which make `CL.EXE` write files. Runtime reconfiguration cannot do
   this (`src/server.ts:75-79`), but startup can, so the startup path is the
   privileged one.
 - *Tampering.* `includePaths` from either source is passed to `/I`
-  (`src/compiler.ts:28-33`). A client that controls an include directory
+  (`src/compiler.ts:29-34`). A client that controls an include directory
   controls the headers the preprocessor sees for every open file.
 - *Denial of service.* `didChangeConfiguration` iterates all open documents
   and spawns a check for each (`src/server.ts:84-92`) with no cap on
@@ -122,12 +122,12 @@ dependency surface is the four `vscode-languageserver*` packages and
 Implemented:
 
 - Argument vectors instead of a shell, so config values cannot smuggle in
-  shell syntax: `src/compiler.ts:86`.
+  shell syntax: `src/compiler.ts:95`.
 - `execFile` with `timeout: 30000`, `maxBuffer: 1 MiB`, an `AbortSignal` and
-  `SIGKILL`: `src/compiler.ts:90`.
+  `SIGKILL`: `src/compiler.ts:106`.
 - Runtime configuration is restricted to `includePaths` and `warnLevel`;
   `additionalFlags` is rejected there: `src/server.ts:75-79`.
-- Type and range validation of every config field: `src/config.ts:65-108`.
+- Type and range validation of every config field: `src/config.ts:74-120`.
 - Debounce and per-URI abort discard stale work: `src/server.ts:95-110`,
   `src/server.ts:167-170`.
 - Per-URI sequence numbers stop an older result from overwriting a newer one:

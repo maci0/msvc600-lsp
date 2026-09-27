@@ -30,12 +30,13 @@ test run.
 
 ## Test layout
 
-- `tests/config.test.ts`, `tests/diagnostics.test.ts`, and the non-toolchain half of
-  `tests/compiler.test.ts` need no external process. `bun run test:unit` runs those three files.
+- `tests/config.test.ts`, `tests/wine-path.test.ts`, `tests/diagnostics.test.ts`, and the
+  non-toolchain half of `tests/compiler.test.ts` need no external process. `bun run test:unit`
+  runs those four files.
 - The `describeWithToolchain` blocks in `tests/compiler.test.ts`, and all of
   `tests/server.test.ts`, spawn the real `CL.EXE` through Wine and skip themselves when Wine or
-  `VC/VC98` is absent. Put pure logic tests outside `describeWithToolchain` so they stay
-  runnable everywhere.
+  `VC/VC98` is absent. Put pure logic tests in the unit files, outside `describeWithToolchain`,
+  so they stay runnable everywhere.
 - `tests/fixtures/` holds the `.c` and `.cpp` inputs the compiler suite checks.
 
 Run one file or one test:

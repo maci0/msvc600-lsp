@@ -13,7 +13,7 @@
     "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:unit": "vitest run tests/config.test.ts tests/diagnostics.test.ts tests/compiler.test.ts",
+    "test:unit": "vitest run tests/config.test.ts tests/diagnostics.test.ts tests/wine-path.test.ts tests/compiler.test.ts",
     "check": "bun run typecheck && bun run test",
     "doctor": "bash scripts/doctor.sh",
     "start": "bun dist/server.js --stdio",

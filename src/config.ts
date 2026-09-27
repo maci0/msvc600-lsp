@@ -1,4 +1,5 @@
 import * as path from 'path';
+import { WINE_MSVC_BASE } from './wine-path';
 
 /** Valid MSVC 6.0 warning levels: 0 (none) through 4 (most verbose). */
 export type WarnLevel = 0 | 1 | 2 | 3 | 4;
@@ -41,8 +42,6 @@ export interface Msvc6Config {
   /** Whether to invoke CL.EXE through Wine. */
   useWine: boolean;
 }
-
-const WINE_MSVC_BASE = 'C:\\msvc6';
 
 /** CL.EXE diagnostics are ASCII-safe under Wine's UTF-8 console by default. */
 export const DEFAULT_OUTPUT_ENCODING = 'utf8';
@@ -133,39 +132,3 @@ function isSupportedEncoding(label: string): boolean {
   }
 }
 
-/**
- * Converts a Linux/macOS filesystem path to a Wine-compatible Z:-drive path.
- *
- * Example: `/tmp/test.c` → `Z:\tmp\test.c`
- */
-export function toWinePath(linuxPath: string): string {
-  const absolute = path.resolve(linuxPath);
-  if (/^[A-Za-z]:[\\/]/.test(absolute)) return absolute;
-  return 'Z:' + absolute.replace(/\//g, '\\');
-}
-
-/**
- * Converts a Wine/Windows path back to a POSIX path.
- *
- * - `Z:\tmp\test.c` → `/tmp/test.c`
- * - `C:\msvc6\include\stdio.h` → left unchanged (internal Wine path)
- * - Generic backslash paths → forward slashes
- */
-export function fromWinePath(winePath: string): string {
-  if (/^[Zz]:/.test(winePath)) {
-    return winePath.slice(2).replace(/\\/g, '/');
-  }
-
-  const normalized = winePath.replace(/\//g, '\\');
-  const lower = normalized.toLowerCase();
-  if (lower === 'c:\\msvc6' || lower.startsWith('c:\\msvc6\\')) {
-    return winePath;
-  }
-
-  // Other Wine drive letters (A:-Y:) are internal Wine mappings — leave unchanged.
-  if (/^[A-Ya-y]:[\\/]/.test(winePath)) {
-    return winePath;
-  }
-
-  return winePath.replace(/\\/g, '/');
-}
