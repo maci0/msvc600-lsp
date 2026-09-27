@@ -18,8 +18,9 @@ exports.LSP_UINT_MAX = 2147483647;
 /**
  * Parses raw CL.EXE stdout+stderr into structured diagnostics.
  *
- * Handles multi-line diagnostics where continuation lines (indented 8 spaces)
- * are attached as `relatedInfo` to the preceding diagnostic.
+ * Handles multi-line diagnostics where continuation lines (indented by at
+ * least 8 spaces, or a tab) are attached as `relatedInfo` to the preceding
+ * diagnostic.
  */
 function parseDiagnostics(output) {
     const lines = output.split(/\r?\n/);

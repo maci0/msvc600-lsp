@@ -35,8 +35,9 @@ test run.
 
 ## Test layout
 
-Only `tests/compiler.test.ts` and `tests/server.test.ts` spawn the real toolchain or the built
-server; every other file is pure logic and runs anywhere.
+Only `tests/compiler.test.ts` and `tests/server.test.ts` spawn the real toolchain; every other
+file needs no MSVC 6.0 install (`tests/setup-includes.test.ts` needs a POSIX shell, since it runs
+`scripts/setup-includes.sh`).
 
 - `bun run test:unit` runs everything except those two, which is the fast loop: no Wine, no
   MSVC 6.0 tree, no `tsc` emit. Add a new test file there by default.
@@ -45,7 +46,9 @@ server; every other file is pure logic and runs anywhere.
   those two files still runs: `describe('command line')` and
   `describe('LSP Server tool failure signalling')` in `tests/server.test.ts` build `dist/` with
   the locally installed `tsc` in `beforeAll` and point the server at a `clPath` that does not
-  exist, so neither needs MSVC 6.0.
+  exist or at one of the stand-in compilers in `tests/fixtures/`, so neither needs MSVC 6.0. Put
+  pure logic tests in the unit files, outside `describeWithToolchain`, so they stay runnable
+  everywhere.
 - `tests/tempfile.test.ts` and `tests/encoding.test.ts` write to a directory the test creates
   rather than counting entries in `os.tmpdir()`: vitest runs files in parallel workers that share
   it, so a count over the shared directory is order dependent.

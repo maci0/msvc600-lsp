@@ -145,7 +145,7 @@ describe('TaskQueue', () => {
     });
 
     it('keeps the backlog in submission order when a middle entry is superseded', async () => {
-      const queue = new TaskQueue(1);
+      const queue = new TaskQueue(1, ignore);
       const blocker = deferred();
       const ran: string[] = [];
 

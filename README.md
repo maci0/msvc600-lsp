@@ -25,9 +25,10 @@ Debouncing (300 ms) and abort-on-stale ensure only the latest edit triggers a ch
 
 Part of the test suite is an integration suite: the `describeWithToolchain` blocks in
 `tests/compiler.test.ts` and `tests/server.test.ts` spawn the real `CL.EXE` through Wine, so Wine
-and an MSVC 6.0 install are needed for those. Without them they skip themselves and say why on
-stderr, and `bun run test` still passes on the remaining files; `bun run test:unit` runs only
-those and needs neither.
+and an MSVC 6.0 install are needed for those. Without them they skip themselves with a
+`[skip] MSVC6 integration tests disabled:` line naming the missing piece, and `bun run test` still
+passes on the remaining files; `bun run test:unit` runs the subset that needs neither, which is
+the fast check on a machine with no toolchain.
 
 ## Installation
 
@@ -173,6 +174,7 @@ src/
 ├── diagnostics.ts       # MSVC output parser → LSP Diagnostic conversion
 ├── encoding.ts          # Source preparation: BOM strip, lone surrogates, UTF-8 bytes
 ├── logging.ts           # Control-character stripping for the client log
+├── scheduler.ts         # Timer boundary: the debounce that coalesces edit bursts
 ├── server.ts            # LSP server lifecycle, debouncing, abort handling
 ├── scheduler.ts         # Debounce boundary over the platform timer
 ├── task-queue.ts        # Bounded per-URI cancellation queue for validations

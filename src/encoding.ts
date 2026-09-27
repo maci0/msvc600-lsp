@@ -1,4 +1,10 @@
 /**
+ * Text preparation at the boundary between the editor's in-memory buffer and
+ * the UTF-8 file CL.EXE reads. Every helper is pure and idempotent, so a
+ * document may pass through them more than once without changing.
+ */
+
+/**
  * A UTF-16 code unit that cannot start or continue a surrogate pair. JSON
  * accepts `"\ud800"` as a complete string, so a client (or any producer of the
  * buffer) can hand over text that is not valid UTF-16. `Buffer.from(text,
@@ -6,10 +12,6 @@
  * source the compiler sees and makes the file longer than the byte length the
  * caller measured. Dropping the unit is the faithful reading: an unpaired half
  * encodes no character at all.
- *
- * Text preparation at the boundary between the editor's in-memory buffer and
- * the UTF-8 file CL.EXE reads. Every helper is pure and idempotent, so a
- * document may pass through them more than once without changing.
  */
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 

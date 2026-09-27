@@ -32,8 +32,11 @@ package version, not a published artifact.
   a client could ask for a check that holds memory without limit. A value past
   `MAX_CHECK_TIMEOUT_MS` (600000) or `MAX_CAPTURED_OUTPUT_BYTES` (67108864) is now rejected and
   reported by name, leaving the previous bound in place.
-- `src/scheduler.ts` was removed while `src/server.ts` still imported it, so the type check and
-  the server build both failed on a missing module.
+- `src/scheduler.ts`, the timer boundary `tests/scheduler.test.ts` drives with
+  `createManualScheduler`, was missing from the tree, so the type check failed and the module
+  could not be built.
+- `tests/task-queue.test.ts` constructed a `TaskQueue` without the error handler the constructor
+  requires, so the test tree did not type-check even when the source did.
 - Scratch-source staging lives in one module again. `tempfile.ts` owns the `TempFileStore`
   boundary and the sweep, while `compiler.ts` carried a second write path with its own copy of
   the name prefix and no exclusive-create or size check, plus two helpers no caller used. One

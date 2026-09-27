@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ENV_NAMES = exports.ENV_PREFIX = exports.MAX_CAPTURED_OUTPUT_BYTES = exports.MAX_CHECK_TIMEOUT_MS = exports.RUNTIME_KEYS = exports.DEFAULT_MAX_OUTPUT_BYTES = exports.DEFAULT_CHECK_TIMEOUT_MS = exports.DEFAULT_WINE_EXECUTABLE = exports.DEFAULT_WARN_LEVEL = exports.DEFAULT_OUTPUT_ENCODING = exports.SCRATCH_EXTENSIONS = exports.CPP_SCRATCH_EXTENSION = exports.C_SCRATCH_EXTENSION = exports.ALL_EXTENSIONS = exports.CPP_EXTENSIONS = exports.C_EXTENSIONS = void 0;
+exports.ENV_NAMES = exports.ENV_PREFIX = exports.RUNTIME_KEYS = exports.MAX_CAPTURED_OUTPUT_BYTES = exports.MAX_CHECK_TIMEOUT_MS = exports.DEFAULT_MAX_OUTPUT_BYTES = exports.DEFAULT_CHECK_TIMEOUT_MS = exports.DEFAULT_WINE_EXECUTABLE = exports.DEFAULT_WARN_LEVEL = exports.DEFAULT_OUTPUT_ENCODING = exports.SCRATCH_EXTENSIONS = exports.CPP_SCRATCH_EXTENSION = exports.C_SCRATCH_EXTENSION = exports.ALL_EXTENSIONS = exports.CPP_EXTENSIONS = exports.C_EXTENSIONS = void 0;
 exports.defaultIncludePaths = defaultIncludePaths;
 exports.defaultConfig = defaultConfig;
 exports.validateConfig = validateConfig;
