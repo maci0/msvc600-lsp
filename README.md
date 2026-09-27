@@ -15,9 +15,12 @@ Debouncing (300 ms) and abort-on-stale ensure only the latest edit triggers a ch
 
 ## Prerequisites
 
+- **Bun** — runs every script in `package.json`, including `build`, `test`, and `start`
 - **Node.js ≥ 18**
 - **Wine** (Linux/macOS) or native Windows
-- **MSVC 6.0 installation** — the `VC/VC98` directory must be present at the package root (use `bun run setup` to configure include paths)
+- **MSVC 6.0 installation**: `VC/VC98/{BIN,INCLUDE,LIB}` must be present at the package root, since that path is the default `msvcBasePath`. On Linux, `bun run setup` mirrors the tree into `~/.wine/drive_c/msvc6` with a lowercased copy of every file, because MSVC headers use mixed-case `#include` lines that do not resolve on a case-sensitive filesystem. The script is Linux-only (it writes to `~/.wine/drive_c`), so on macOS point `includePaths` at `VC/VC98/INCLUDE` instead.
+
+The test suite is an integration suite: it spawns the real `CL.EXE` through Wine, so Wine and an MSVC 6.0 install are required to run `bun run test`.
 
 ## Installation
 
@@ -43,7 +46,7 @@ Pass these in your client's `initializationOptions`:
 |-------|------|---------|-------------|
 | `msvcBasePath` | `string` | `<pkg>/VC/VC98` | Root of the MSVC 6.0 installation |
 | `clPath` | `string` | `<base>/BIN/CL.EXE` | Absolute path to CL.EXE |
-| `includePaths` | `string[]` | `["C:\\msvc6\\include"]` | Directories passed as `/I` to CL.EXE |
+| `includePaths` | `string[]` | `["C:\\msvc6\\include"]` under Wine, `[<base>/INCLUDE]` on Windows | Directories passed as `/I` to CL.EXE, where absolute POSIX entries are converted to Wine paths |
 | `warnLevel` | `0-4` | `4` | Warning level (`/W0`–`/W4`) |
 | `additionalFlags` | `string[]` | `[]` | Extra flags forwarded verbatim |
 | `wineExecutable` | `string` | `"wine"` | Path to the Wine binary |
@@ -51,7 +54,18 @@ Pass these in your client's `initializationOptions`:
 
 ### Runtime Configuration
 
-Only `includePaths` and `warnLevel` can be changed at runtime via `workspace/didChangeConfiguration`. Other fields (especially `additionalFlags`) are locked to initialization to prevent arbitrary CL.EXE flag injection.
+Only `includePaths` and `warnLevel` can be changed at runtime via `workspace/didChangeConfiguration`. The payload is read from the `msvc6` key, and anything else in the settings object is ignored:
+
+```json
+{
+  "msvc6": {
+    "includePaths": ["C:\\msvc6\\include"],
+    "warnLevel": 3
+  }
+}
+```
+
+Other fields (especially `additionalFlags`) are locked to initialization to prevent arbitrary CL.EXE flag injection. Fields that fail validation are dropped rather than rejected, so a bad value silently leaves the previous one in place. Changing the config re-validates every open document.
 
 ## Architecture
 
@@ -78,6 +92,12 @@ src/
 | `.hpp`, `.hxx` | C++ header | `/TP` |
 | `.h` | C/C++ header | (none — inferred by CL.EXE) |
 
+## Limits
+
+The open buffer is checked as a standalone translation unit, so a header that relies on types or include guards supplied by a `.c` file reports errors a real build would not.
+
+Diagnostics are line-scoped: each one spans columns 0 to the end of the reported line, because CL.EXE gives no column numbers for these messages. A check is killed after 30 s, and output past 1 MiB is truncated, which drops the tail of the diagnostic list.
+
 ## Development
 
 ```bash
@@ -85,9 +105,9 @@ bun run test          # Run test suite
 bun run test:watch    # Watch mode
 bun run build         # Compile TypeScript
 bun run watch         # Watch + compile
-bun run setup         # Configure Wine include paths
+bun run setup         # Mirror MSVC6 into the Wine prefix with lowercased copies (Linux only)
 ```
 
 ## License
 
-See project root for license information.
+None declared yet. The repository ships no license file, so no permission to use or redistribute the code has been granted.
