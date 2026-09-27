@@ -13,7 +13,6 @@ import {
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { URI } from 'vscode-uri';
 import * as path from 'path';
-import * as fs from 'fs';
 import {
   Msvc6Config,
   defaultConfig,
@@ -28,10 +27,10 @@ import {
 import {
   syntaxCheck,
   createTempSource,
+  removeTempSourceFile,
   sweepStaleTempFiles,
   DocumentTooLargeError,
-  COMPILE_TIMEOUT_MS,
-  MAX_OUTPUT_BYTES,
+  MAX_CONCURRENT_CHECKS,
 } from './compiler';
 import { parseDiagnostics, toLspDiagnostics, toFailureDiagnostic, LSP_UINT_MAX } from './diagnostics';
 import { sanitizeForLog } from './logging';
@@ -60,6 +59,9 @@ const pendingValidations = new Map<string, NodeJS.Timeout>();
 
 const DEBOUNCE_MS = 300;
 
+/** The only config fields a `didChangeConfiguration` notification may replace. */
+const RUNTIME_SETTABLE_FIELDS: readonly string[] = ['includePaths', 'warnLevel'];
+
 /** Drops a document's pending debounce timer, if one is still waiting. */
 function clearPendingValidation(uri: string): void {
   const pending = pendingValidations.get(uri);
@@ -69,16 +71,11 @@ function clearPendingValidation(uri: string): void {
 }
 
 /**
- * At most this many CL.EXE children exist at once. Each check is a heavyweight
- * process (a full Wine services startup on non-Windows), so the number is kept
- * at the parallelism a developer machine can actually absorb; the queue
- * serialises the rest rather than dropping them.
- */
-const MAX_CONCURRENT_CHECKS = 2;
-
-/**
  * Validation tasks, one per document URI. A new task for a URI aborts the
- * previous one, so a superseded edit never reaches the compiler.
+ * previous one, so a superseded edit never reaches the compiler. The queue's
+ * width is the process-wide {@link MAX_CONCURRENT_CHECKS}: it bounds how many
+ * entries reach `syntaxCheck` at once, and the compiler holds the same ceiling
+ * for callers that never enter the queue.
  */
 const validationQueue = new TaskQueue(MAX_CONCURRENT_CHECKS);
 
@@ -185,6 +182,19 @@ connection.onDidChangeConfiguration((change) => {
   // Runtime config changes are untrusted — only accept non-executable fields.
   // Notably, additionalFlags is excluded: arbitrary CL.EXE flags could write files
   // or alter behavior beyond syntax checking. Set additionalFlags via initializationOptions only.
+  // A field that validated but is not settable at runtime is named here, so the
+  // user is not left believing the value they sent took effect.
+  for (const key of Object.keys(validated.values)) {
+    if (!RUNTIME_SETTABLE_FIELDS.includes(key)) {
+      connection.console.warn(
+        sanitizeForLog(
+          `msvc600-lsp: didChangeConfiguration ignored ${key}: only ` +
+            `${RUNTIME_SETTABLE_FIELDS.join(' and ')} can change while the server runs`,
+        ),
+      );
+    }
+  }
+
   const previous = config;
   config = {
     ...config,
@@ -322,7 +332,7 @@ async function runValidation(
     if (result.timedOut) {
       publishCheckFailure(
         uri,
-        `CL.EXE did not finish within ${COMPILE_TIMEOUT_MS} ms and was killed; ` +
+        `CL.EXE did not finish within ${config.checkTimeoutMs} ms and was killed; ` +
           `diagnostics for this file are unavailable, not empty.`,
       );
       return;
@@ -334,7 +344,7 @@ async function runValidation(
     if (result.truncated) {
       connection.console.error(
         sanitizeForLog(
-          `CL.EXE output for ${uri} exceeded ${MAX_OUTPUT_BYTES} bytes; ` +
+          `CL.EXE output for ${uri} exceeded ${config.maxOutputBytes} bytes; ` +
             'reported diagnostics are incomplete',
         ),
       );
@@ -362,11 +372,7 @@ async function runValidation(
     connection.console.error(`Validation error (${uri}): ${String(e)}`);
   } finally {
     if (tempFile !== undefined) {
-      try {
-        fs.unlinkSync(tempFile);
-      } catch {
-        // Temp file may already be gone.
-      }
+      removeTempSourceFile(tempFile);
     }
   }
 }

@@ -33,21 +33,22 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.DocumentTooLargeError = exports.MAX_CONCURRENT_CHECKS = exports.MAX_SOURCE_BYTES = void 0;
 exports.buildArgs = buildArgs;
+exports.createTempSource = createTempSource;
+exports.removeTempSourceFile = removeTempSourceFile;
 exports.syntaxCheck = syntaxCheck;
-exports.createTempSourcePath = createTempSourcePath;
 exports.sweepStaleTempFiles = sweepStaleTempFiles;
 exports.stripByteOrderMark = stripByteOrderMark;
 exports.syntaxCheckContent = syntaxCheckContent;
 const child_process_1 = require("child_process");
-const crypto_1 = require("crypto");
 const fs = __importStar(require("fs"));
 const os = __importStar(require("os"));
 const path = __importStar(require("path"));
+const util_1 = require("util");
 const config_1 = require("./config");
 const wine_path_1 = require("./wine-path");
-/** Scratch sources are named with this prefix so a crashed run leaves identifiable leftovers. */
-const TEMP_SOURCE_PREFIX = 'msvc6_lsp_';
+const tempfile_1 = require("./tempfile");
 /** Suffixes a scratch source may carry. */
 const TEMP_SOURCE_EXTENSIONS = ['.c', '.cpp'];
 /**
@@ -56,6 +57,14 @@ const TEMP_SOURCE_EXTENSIONS = ['.c', '.cpp'];
  * process is never removed.
  */
 const STALE_TEMP_MIN_AGE_MS = 60 * 60 * 1000;
+/** Upper bound on the source text handed to a syntax check. */
+exports.MAX_SOURCE_BYTES = 8 * 1024 * 1024;
+/**
+ * Concurrent CL.EXE children allowed at once; each one is a Wine process, a
+ * full services startup on non-Windows. This is the process-wide ceiling: a
+ * per-URI queue bounding its own workers must not be raised above it.
+ */
+exports.MAX_CONCURRENT_CHECKS = 2;
 /**
  * Builds the CL.EXE argument list for a syntax-only check.
  * Selects /TC (C) or /TP (C++) based on file extension.
@@ -102,17 +111,105 @@ function getExitCode(error) {
  * Decodes CL.EXE output bytes. A `TextDecoder` never throws on malformed
  * input, so undecodable bytes become U+FFFD rather than aborting the check.
  */
-function decodeOutput(bytes, encoding) {
-    return new TextDecoder(encoding).decode(bytes);
+function decodeOutput(bytes, decoder) {
+    return decoder.decode(bytes);
+}
+/**
+ * Whether the child was killed by the exec timeout rather than by the caller.
+ * A timeout kill carries no string `code` (it is `null`) and no `status`, so
+ * only `killed` distinguishes it from an ordinary non-zero exit.
+ */
+function isTimeoutKill(error) {
+    return error != null && error.killed === true;
+}
+/** Raised when a buffer exceeds {@link MAX_SOURCE_BYTES}. */
+class DocumentTooLargeError extends Error {
+    byteLength;
+    constructor(byteLength) {
+        super(`document is ${byteLength} bytes, over the ${exports.MAX_SOURCE_BYTES} byte syntax-check limit`);
+        this.name = 'DocumentTooLargeError';
+        this.byteLength = byteLength;
+    }
+}
+exports.DocumentTooLargeError = DocumentTooLargeError;
+/** The scratch-source filesystem every entry point below stages through. */
+const systemStore = (0, tempfile_1.createSystemTempFileStore)();
+/**
+ * Stages `content` for the compiler: drops a byte order mark, refuses a buffer
+ * over {@link MAX_SOURCE_BYTES}, and writes through `store`. Every path that
+ * hands document text to `CL.EXE` goes through here, so the invariants hold
+ * whichever store the caller supplied.
+ */
+function stageTempSource(content, ext, store) {
+    const body = stripByteOrderMark(content);
+    const byteLength = Buffer.byteLength(body, 'utf-8');
+    if (byteLength > exports.MAX_SOURCE_BYTES) {
+        throw new DocumentTooLargeError(byteLength);
+    }
+    return store.write(body, ext);
+}
+/**
+ * Writes `content` to a fresh temp file with the given extension and returns
+ * its path. The caller owns the file and must pass it to
+ * {@link removeTempSourceFile}.
+ */
+function createTempSource(content, ext) {
+    return stageTempSource(content, ext, systemStore);
+}
+/** Deletes a temp source file. A file that is already gone is not an error. */
+function removeTempSourceFile(tempFile) {
+    systemStore.remove(tempFile);
+}
+let activeChecks = 0;
+const checkQueue = [];
+function acquireCheckSlot() {
+    if (activeChecks < exports.MAX_CONCURRENT_CHECKS) {
+        activeChecks += 1;
+        return Promise.resolve();
+    }
+    return new Promise((resolve) => checkQueue.push(resolve));
+}
+function releaseCheckSlot() {
+    const next = checkQueue.shift();
+    if (next) {
+        next();
+        return;
+    }
+    activeChecks -= 1;
+}
+function abortError() {
+    const error = new Error('CL.EXE check aborted');
+    error.code = 'ABORT_ERR';
+    return error;
 }
 /**
  * Runs CL.EXE in syntax-check mode (`/Zs`) on the given file.
  *
+ * At most {@link MAX_CONCURRENT_CHECKS} children run at once; the rest queue,
+ * so a burst of open documents cannot spawn an unbounded number of Wine
+ * processes. A queued check whose signal aborts is dropped before it starts.
+ *
  * Always resolves — compiler errors are reported via `exitCode` and
- * `rawOutput`, not via promise rejection. Only rejects when the
- * executable itself cannot be spawned (e.g. ENOENT, EACCES).
+ * `rawOutput`, not via promise rejection. Rejects only when no check could
+ * be attempted at all: the executable could not be spawned (ENOENT, EACCES,
+ * ENOTDIR), the call was aborted, or `outputEncoding` is not a known label.
+ * A run that was killed by `timeoutMs` resolves with `timedOut: true` and an
+ * exit code that carries no diagnostic meaning.
  */
-function syntaxCheck(config, filePath, opts = {}) {
+async function syntaxCheck(config, filePath, opts = {}) {
+    if (opts.signal?.aborted)
+        throw abortError();
+    await acquireCheckSlot();
+    try {
+        if (opts.signal?.aborted)
+            throw abortError();
+        return await runCheck(config, filePath, opts);
+    }
+    finally {
+        releaseCheckSlot();
+    }
+}
+function runCheck(config, filePath, opts) {
     return new Promise((resolve, reject) => {
         const args = buildArgs(config, filePath);
         const executable = config.useWine ? config.wineExecutable : config.clPath;
@@ -120,21 +217,33 @@ function syntaxCheck(config, filePath, opts = {}) {
         const env = config.useWine
             ? { ...process.env, WINEDEBUG: '-all' }
             : { ...process.env };
+        // Built before the spawn: an unknown encoding label throws here, and a
+        // throw inside the executor rejects instead of escaping from the
+        // execFile callback as an uncaught exception.
+        let decoder;
+        try {
+            decoder = new util_1.TextDecoder(config.outputEncoding);
+        }
+        catch (e) {
+            reject(new Error(`Cannot run ${executable} on ${filePath}: unsupported outputEncoding ` +
+                `${JSON.stringify(config.outputEncoding)} (${e.message})`));
+            return;
+        }
         (0, child_process_1.execFile)(executable, execArgs, 
         // killSignal: SIGKILL because Wine ignores SIGTERM reliably.
         // encoding: 'buffer' keeps the raw code-page bytes; they are decoded
         // below with the configured output encoding, not assumed to be UTF-8.
         {
             env,
-            timeout: 30000,
-            maxBuffer: 1024 * 1024,
+            timeout: opts.timeoutMs ?? config.checkTimeoutMs,
+            maxBuffer: config.maxOutputBytes,
             signal: opts.signal,
             killSignal: 'SIGKILL',
             encoding: 'buffer',
         }, (error, stdoutBytes, stderrBytes) => {
-            const stdout = decodeOutput(stdoutBytes, config.outputEncoding);
-            const stderr = decodeOutput(stderrBytes, config.outputEncoding);
-            if (error && typeof error.code === 'string') {
+            const stdout = decodeOutput(stdoutBytes, decoder);
+            const stderr = decodeOutput(stderrBytes, decoder);
+            if (error) {
                 const isSpawnFailure = error.code === 'ENOENT' || error.code === 'EACCES' || error.code === 'ENOTDIR';
                 if (isSpawnFailure && !stdout && !stderr) {
                     reject(new Error(`Failed to execute ${executable}: ${error.code}`));
@@ -148,20 +257,12 @@ function syntaxCheck(config, filePath, opts = {}) {
             const truncated = error != null &&
                 typeof error.code === 'string' &&
                 error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
+            const timedOut = !truncated && isTimeoutKill(error);
             const exitCode = getExitCode(error);
             const rawOutput = stdout + '\n' + stderr;
-            resolve({ stdout, stderr, exitCode, rawOutput, truncated });
+            resolve({ stdout, stderr, exitCode, rawOutput, truncated, timedOut });
         });
     });
-}
-/**
- * Returns a fresh, unused path for a scratch source file. The random name
- * makes two concurrent checks of the same document independent rather than
- * overwriting each other's input.
- */
-function createTempSourcePath(languageId) {
-    const ext = languageId === 'cpp' ? '.cpp' : '.c';
-    return path.join(os.tmpdir(), `${TEMP_SOURCE_PREFIX}${(0, crypto_1.randomUUID)()}${ext}`);
 }
 /**
  * Deletes scratch sources left behind by a run that was killed before its
@@ -174,7 +275,7 @@ function createTempSourcePath(languageId) {
 function sweepStaleTempFiles(now = Date.now()) {
     const removed = [];
     for (const entry of fs.readdirSync(os.tmpdir())) {
-        if (!entry.startsWith(TEMP_SOURCE_PREFIX))
+        if (!entry.startsWith(tempfile_1.TEMP_FILE_PREFIX))
             continue;
         if (!TEMP_SOURCE_EXTENSIONS.some((ext) => entry.endsWith(ext)))
             continue;
@@ -212,26 +313,19 @@ function stripByteOrderMark(content) {
  * Writes `content` to a temp file and runs a syntax check on it.
  * The temp file is cleaned up after the check completes.
  *
- * Exported for the test suite; the server manages its own temp files so it
- * can abort stale checks.
+ * Exported for the test suite; the server drives {@link createTempSource}
+ * itself so it can abort stale checks.
  */
-async function syntaxCheckContent(config, content, languageId) {
-    const tempFile = createTempSourcePath(languageId);
+async function syntaxCheckContent(config, content, languageId, opts = {}) {
+    const ext = languageId === 'cpp' ? '.cpp' : '.c';
+    const store = opts.store ?? systemStore;
+    const tempFile = stageTempSource(content, ext, store);
     try {
-        fs.writeFileSync(tempFile, stripByteOrderMark(content), {
-            encoding: 'utf-8',
-            mode: 0o600,
-        });
         const result = await syntaxCheck(config, tempFile);
         return { ...result, tempFile };
     }
     finally {
-        try {
-            fs.unlinkSync(tempFile);
-        }
-        catch {
-            // Temp file may already be gone — not an error.
-        }
+        store.remove(tempFile);
     }
 }
 //# sourceMappingURL=compiler.js.map

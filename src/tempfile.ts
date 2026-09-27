@@ -4,7 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 
 /** Prefix shared by every temp file the server creates, so leaked files are identifiable. */
-const TEMP_PREFIX = 'msvc6_lsp_';
+export const TEMP_FILE_PREFIX = 'msvc6_lsp_';
 
 /** Temp files hold unsaved editor buffers — 0o600 keeps other local users out. */
 const TEMP_FILE_MODE = 0o600;
@@ -50,8 +50,12 @@ export function createSystemTempFileStore(
 
   return {
     write(content: string, extension: string): string {
-      const file = path.join(dir, `${TEMP_PREFIX}${generateName()}${extension}`);
-      fs.writeFileSync(file, content, { encoding: 'utf-8', mode: TEMP_FILE_MODE });
+      const file = path.join(dir, `${TEMP_FILE_PREFIX}${generateName()}${extension}`);
+      // `wx`: a name already taken in the shared temp directory is an error
+      // rather than something to truncate, so a file or symlink planted by
+      // another local user is never written through. `mode` applies only to a
+      // file this call creates, which is why the flag matters.
+      fs.writeFileSync(file, content, { encoding: 'utf-8', mode: TEMP_FILE_MODE, flag: 'wx' });
       return file;
     },
     remove(file: string): void {
@@ -118,7 +122,7 @@ export function createSimulatedTempFileStore(
       sequence += 1;
       const file = path.join(
         dir,
-        `${TEMP_PREFIX}${String(sequence).padStart(SIMULATED_NAME_DIGITS, '0')}${extension}`,
+        `${TEMP_FILE_PREFIX}${String(sequence).padStart(SIMULATED_NAME_DIGITS, '0')}${extension}`,
       );
       files.set(file, content);
       events.push({ op: 'write', file, content });

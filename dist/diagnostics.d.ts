@@ -8,6 +8,8 @@ export interface ParsedDiagnostic {
     message: string;
     relatedInfo: string[];
 }
+/** LSP `uinteger` max value (2^31 - 1), used for "end of line" positions. */
+export declare const LSP_UINT_MAX = 2147483647;
 /**
  * Parses raw CL.EXE stdout+stderr into structured diagnostics.
  *
@@ -27,16 +29,4 @@ export declare function toLspDiagnostics(parsed: ParsedDiagnostic[], targetFile:
  * no result at all.
  */
 export declare function toFailureDiagnostic(message: string): Diagnostic;
-/**
- * Case-folds, unifies separators, and normalizes to NFC so a path spelled
- * NFD by the filesystem (macOS) still matches the NFC spelling an editor or
- * database supplies.
- */
-export declare function normalizeForComparison(filePath: string): string;
-/**
- * Groups diagnostics by normalized file path for batch processing.
- *
- * Exported for the test suite; the server filters to a single file instead.
- */
-export declare function groupByFile(diagnostics: ParsedDiagnostic[]): Map<string, ParsedDiagnostic[]>;
 //# sourceMappingURL=diagnostics.d.ts.map

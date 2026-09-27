@@ -1,10 +1,9 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.LSP_UINT_MAX = void 0;
 exports.parseDiagnostics = parseDiagnostics;
 exports.toLspDiagnostics = toLspDiagnostics;
 exports.toFailureDiagnostic = toFailureDiagnostic;
-exports.normalizeForComparison = normalizeForComparison;
-exports.groupByFile = groupByFile;
 const vscode_languageserver_protocol_1 = require("vscode-languageserver-protocol");
 const wine_path_1 = require("./wine-path");
 // MSVC output: filename(line) : (error|warning|fatal error) CODE: message
@@ -15,7 +14,7 @@ const DIAG_REGEX = /^(.+)\((\d+)\)\s*:\s*(error|warning|fatal error)\s+([A-Za-z]
 // CL.EXE typically indents continuation/context lines; accept 8+ spaces or tabs.
 const CONTINUATION_INDENT = /^(?: {8,}|\t)/;
 /** LSP `uinteger` max value (2^31 - 1), used for "end of line" positions. */
-const LSP_UINT_MAX = 2147483647;
+exports.LSP_UINT_MAX = 2147483647;
 /**
  * Parses raw CL.EXE stdout+stderr into structured diagnostics.
  *
@@ -42,13 +41,16 @@ function parseDiagnostics(output) {
                 relatedInfo: [],
             };
         }
-        else if (current && CONTINUATION_INDENT.test(line)) {
-            current.relatedInfo.push(line.trim());
-        }
-        else if (line.trim() === '') {
-            if (current) {
-                diagnostics.push(current);
-                current = null;
+        else {
+            const trimmed = line.trim();
+            if (current && CONTINUATION_INDENT.test(line)) {
+                current.relatedInfo.push(trimmed);
+            }
+            else if (trimmed === '') {
+                if (current) {
+                    diagnostics.push(current);
+                    current = null;
+                }
             }
         }
     }
@@ -71,13 +73,14 @@ function mapSeverity(severity) {
  * to only those belonging to `targetFile` (case-insensitive, slash-normalized).
  */
 function toLspDiagnostics(parsed, targetFile) {
+    const target = normalizeForComparison(targetFile);
     return parsed
-        .filter((d) => normalizeForComparison(d.file) === normalizeForComparison(targetFile))
+        .filter((d) => normalizeForComparison(d.file) === target)
         .map((d) => {
-        const line = Math.min(LSP_UINT_MAX, Math.max(0, d.line - 1));
+        const line = Math.min(exports.LSP_UINT_MAX, Math.max(0, d.line - 1));
         const range = {
             start: vscode_languageserver_protocol_1.Position.create(line, 0),
-            end: vscode_languageserver_protocol_1.Position.create(line, LSP_UINT_MAX),
+            end: vscode_languageserver_protocol_1.Position.create(line, exports.LSP_UINT_MAX),
         };
         let message = d.message;
         if (d.relatedInfo.length > 0) {
@@ -113,24 +116,5 @@ function toFailureDiagnostic(message) {
  */
 function normalizeForComparison(filePath) {
     return filePath.normalize('NFC').toLowerCase().replace(/\\/g, '/');
-}
-/**
- * Groups diagnostics by normalized file path for batch processing.
- *
- * Exported for the test suite; the server filters to a single file instead.
- */
-function groupByFile(diagnostics) {
-    const groups = new Map();
-    for (const d of diagnostics) {
-        const key = normalizeForComparison(d.file);
-        const existing = groups.get(key);
-        if (existing) {
-            existing.push(d);
-        }
-        else {
-            groups.set(key, [d]);
-        }
-    }
-    return groups;
 }
 //# sourceMappingURL=diagnostics.js.map

@@ -13,7 +13,7 @@ import {
   MAX_SOURCE_BYTES,
   MAX_CONCURRENT_CHECKS,
 } from '../src/compiler';
-import { Msvc6Config } from '../src/config';
+import { Msvc6Config, DEFAULT_CHECK_TIMEOUT_MS, DEFAULT_MAX_OUTPUT_BYTES } from '../src/config';
 import { CL_EXE, MSVC_ROOT, describeWithToolchain } from './helpers/toolchain';
 
 const FIXTURES = path.resolve(__dirname, 'fixtures');
@@ -28,6 +28,8 @@ function testConfig(): Msvc6Config {
     wineExecutable: 'wine',
     outputEncoding: 'utf8',
     useWine: true,
+    checkTimeoutMs: DEFAULT_CHECK_TIMEOUT_MS,
+    maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
   };
 }
 
@@ -194,6 +196,41 @@ describe('syntaxCheck failure signalling', () => {
       expect(result.timedOut).toBe(true);
       expect(result.truncated).toBe(false);
       expect(result.rawOutput.trim()).toBe('');
+    },
+  );
+
+  it.runIf(process.platform !== 'win32')(
+    'kills CL.EXE after the configured checkTimeoutMs when the call sets no timeout',
+    async () => {
+      const cfg = {
+        ...testConfig(),
+        useWine: false,
+        clPath: path.join(FIXTURES, 'hang.mjs'),
+        checkTimeoutMs: 300,
+      };
+      const result = await syntaxCheck(cfg, path.join(FIXTURES, 'valid.c'));
+      expect(result.timedOut).toBe(true);
+    },
+  );
+
+  it.runIf(process.platform !== 'win32')(
+    'truncates output past the configured maxOutputBytes',
+    async () => {
+      const source = path.join(FIXTURES, 'valid.c');
+      const noisy = {
+        ...testConfig(),
+        useWine: false,
+        clPath: path.join(FIXTURES, 'noisy_compiler.mjs'),
+      };
+
+      const truncated = await syntaxCheck({ ...noisy, maxOutputBytes: 1024 }, source);
+      expect(truncated.truncated).toBe(true);
+
+      const whole = await syntaxCheck(
+        { ...noisy, maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES },
+        source,
+      );
+      expect(whole.truncated).toBe(false);
     },
   );
 

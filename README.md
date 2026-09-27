@@ -121,7 +121,7 @@ Only `includePaths` and `warnLevel` can be changed at runtime via `workspace/did
 }
 ```
 
-Other fields (especially `additionalFlags`) cannot be changed at runtime, so a runtime notification cannot inject CL.EXE flags. They are still set freely at startup, where the client also picks `clPath` and `wineExecutable`, so anything able to speak the server's stdio channel can choose the binary that runs and the flags it receives. See `docs/THREAT_MODEL.md`. Rejected fields are dropped and logged, so a bad value leaves the previous one in place with a reason attached. Changing the config re-validates every open document.
+Other fields (especially `additionalFlags`) cannot be changed at runtime, so a runtime notification cannot inject CL.EXE flags. They are still set freely at startup, where the client also picks `clPath` and `wineExecutable`, so anything able to speak the server's stdio channel can choose the binary that runs and the flags it receives. See `docs/THREAT_MODEL.md`. A field that fails validation and a field that cannot be changed at runtime are both dropped and logged by name, so the previous value stays in place with a reason attached rather than looking accepted. Changing the config re-validates every open document.
 
 ## Architecture
 
@@ -161,7 +161,7 @@ The open buffer is checked as a standalone translation unit, so a header that re
 
 Diagnostics are line-scoped: each one spans columns 0 to the end of the reported line, because CL.EXE gives no column numbers for these messages. A check is killed after `checkTimeoutMs` (30 s by default), and output past `maxOutputBytes` (1 MiB by default) is truncated, which drops the tail of the diagnostic list.
 
-At most four `CL.EXE` children run at once; the rest queue, so a large revalidation after a settings change cannot spawn a process per open document. Buffers above 8 MiB are not written to the temp directory at all, and the editor shows a single `msvc6-too-large` note in their place.
+At most two `CL.EXE` children run at once; the rest queue, so a large revalidation after a settings change cannot spawn a process per open document. Buffers above 8 MiB are not written to the temp directory at all, and the editor shows a single `msvc6-too-large` note in their place.
 
 A check that never ran, whether CL.EXE cannot be spawned or the scratch source cannot be written, publishes one error diagnostic at the top of the file saying so rather than an empty list, so a broken setup never reads as a clean file.
 
