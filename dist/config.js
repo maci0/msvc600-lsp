@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ENV_NAMES = exports.ENV_PREFIX = exports.RUNTIME_KEYS = exports.DEFAULT_MAX_OUTPUT_BYTES = exports.DEFAULT_CHECK_TIMEOUT_MS = exports.DEFAULT_WINE_EXECUTABLE = exports.DEFAULT_WARN_LEVEL = exports.DEFAULT_OUTPUT_ENCODING = exports.SCRATCH_EXTENSIONS = exports.CPP_SCRATCH_EXTENSION = exports.C_SCRATCH_EXTENSION = exports.ALL_EXTENSIONS = exports.CPP_EXTENSIONS = exports.C_EXTENSIONS = void 0;
+exports.ENV_NAMES = exports.ENV_PREFIX = exports.MAX_CAPTURED_OUTPUT_BYTES = exports.MAX_CHECK_TIMEOUT_MS = exports.RUNTIME_KEYS = exports.DEFAULT_MAX_OUTPUT_BYTES = exports.DEFAULT_CHECK_TIMEOUT_MS = exports.DEFAULT_WINE_EXECUTABLE = exports.DEFAULT_WARN_LEVEL = exports.DEFAULT_OUTPUT_ENCODING = exports.SCRATCH_EXTENSIONS = exports.CPP_SCRATCH_EXTENSION = exports.C_SCRATCH_EXTENSION = exports.ALL_EXTENSIONS = exports.CPP_EXTENSIONS = exports.C_EXTENSIONS = void 0;
 exports.defaultIncludePaths = defaultIncludePaths;
 exports.defaultConfig = defaultConfig;
 exports.validateConfig = validateConfig;
@@ -44,6 +44,7 @@ exports.configFromEnv = configFromEnv;
 exports.formatIssues = formatIssues;
 const path = __importStar(require("path"));
 const wine_path_1 = require("./wine-path");
+const logging_1 = require("./logging");
 /**
  * Supported C/C++ file extensions for syntax checking.
  * Translation units (.c, .cpp, .cxx, .cc) are compiled directly.
@@ -76,6 +77,17 @@ exports.DEFAULT_WINE_EXECUTABLE = 'wine';
 exports.DEFAULT_CHECK_TIMEOUT_MS = 30_000;
 /** Cap on captured CL.EXE output. Past it the tail of the diagnostic list is lost. */
 exports.DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024;
+/**
+ * Ceilings on the two bounds a client supplies, whatever it asks for.
+ *
+ * `maxOutputBytes` becomes the buffer CL.EXE's output accumulates in and
+ * `checkTimeoutMs` the window it accumulates for, so a pair chosen without an
+ * upper bound lets a single check grow the server's memory for as long as it
+ * likes. A value past the ceiling is rejected and reported, which leaves the
+ * previous bound in place rather than silently substituting another.
+ */
+exports.MAX_CHECK_TIMEOUT_MS = 600_000;
+exports.MAX_CAPTURED_OUTPUT_BYTES = 64 * 1024 * 1024;
 /**
  * The `/I` entry for a given base and Wine mode. Under Wine the headers are
  * read from the case-insensitive overlay in the prefix rather than from
@@ -143,22 +155,27 @@ function validateConfig(raw) {
             issues.push({ key, message: `expected an array of strings, got ${describe(value)}` });
         }
     };
-    const takePositiveInt = (key) => {
+    const takeBoundedInt = (key, ceiling) => {
         const value = obj[key];
         if (value === undefined)
             return;
-        if (typeof value === 'number' && Number.isInteger(value) && value > 0)
-            result[key] = value;
-        else
+        if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
             issues.push({ key, message: `expected a positive integer, got ${describe(value)}` });
+        }
+        else if (value > ceiling) {
+            issues.push({ key, message: `must be at most ${ceiling}, got ${describe(value)}` });
+        }
+        else {
+            result[key] = value;
+        }
     };
     takeString('msvcBasePath');
     takeString('clPath');
     takeString('wineExecutable');
     takeStringArray('includePaths');
     takeStringArray('additionalFlags');
-    takePositiveInt('checkTimeoutMs');
-    takePositiveInt('maxOutputBytes');
+    takeBoundedInt('checkTimeoutMs', exports.MAX_CHECK_TIMEOUT_MS);
+    takeBoundedInt('maxOutputBytes', exports.MAX_CAPTURED_OUTPUT_BYTES);
     if (obj.warnLevel !== undefined) {
         const level = obj.warnLevel;
         if (typeof level === 'number' && Number.isInteger(level) && level >= 0 && level <= 4) {
@@ -352,10 +369,17 @@ function configFromEnv(env = process.env) {
         ],
     };
 }
-/** Formats validation issues as one log line each, prefixed with the source name. */
+/**
+ * Formats validation issues as one log line each, prefixed with the source name.
+ *
+ * Every field is sanitized: `key` and `message` carry whatever the client sent,
+ * and an issue key is an object key, which the client chooses freely. A newline
+ * or a bidi control in either would otherwise forge a log line, reorder the
+ * text around it, or render two different rejected keys identically.
+ */
 function formatIssues(source, issues) {
-    return issues.map((issue) => issue.key === ''
+    return issues.map((issue) => (0, logging_1.sanitizeForLog)(issue.key === ''
         ? `msvc600-lsp: ${source} ignored: ${issue.message}`
-        : `msvc600-lsp: ${source} rejected ${issue.key}: ${issue.message}`);
+        : `msvc600-lsp: ${source} rejected ${issue.key}: ${issue.message}`));
 }
 //# sourceMappingURL=config.js.map

@@ -95,7 +95,9 @@ A value that fails validation is dropped and reported on the server's log channe
 misspelled key or a value of the wrong type is visible instead of leaving a default in place
 unexplained. The effective configuration is logged once on `initialize`, together with a warning
 when `clPath` or a path-form `wineExecutable` does not exist on this machine. Nothing in this
-configuration is secret, so the log is not redacted.
+configuration is secret, so the log is not redacted, but control, format, and bidi characters
+are stripped from every logged line: the field names and paths come from the client, and a
+newline or a bidi override in one would otherwise forge or reorder a log line.
 
 ### Initialization Options
 
@@ -111,8 +113,8 @@ Pass these in your client's `initializationOptions`:
 | `wineExecutable` | `string` | `"wine"` | Path to the Wine binary |
 | `useWine` | `boolean` | `true` on non-Windows | Whether to invoke CL.EXE through Wine |
 | `outputEncoding` | `string` | `"utf8"` | Label `TextDecoder` uses on CL.EXE output. Use the toolchain's console code page (e.g. `cp1252`) if diagnostics come out as mojibake. An unknown label is rejected at load, since it would otherwise throw at decode time |
-| `checkTimeoutMs` | `number` | `30000` | Milliseconds before a check is killed. A hung Wine is worse than no diagnostics |
-| `maxOutputBytes` | `number` | `1048576` | Cap on captured CL.EXE output. Past it the tail of the diagnostic list is lost |
+| `checkTimeoutMs` | `number` | `30000` | Milliseconds before a check is killed. A hung Wine is worse than no diagnostics. A value above `600000` is rejected |
+| `maxOutputBytes` | `number` | `1048576` | Cap on captured CL.EXE output. Past it the tail of the diagnostic list is lost. A value above `67108864` is rejected |
 
 `outputEncoding` defaults to `utf8` because Wine's UTF-8 console already passes ASCII-safe
 CL.EXE output through unchanged. Switch it if diagnostics carry characters above U+007F.

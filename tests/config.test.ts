@@ -11,6 +11,8 @@ import {
   ALL_EXTENSIONS,
   runtimeConfigEquals,
   runtimeConfigUpdate,
+  MAX_CHECK_TIMEOUT_MS,
+  MAX_CAPTURED_OUTPUT_BYTES,
 } from '../src/config';
 import type { WarnLevel, Msvc6Config } from '../src/config';
 
@@ -179,6 +181,36 @@ describe('validateConfig', () => {
     });
     expect(validateConfig({ checkTimeoutMs: -1 }).issues[0]?.key).toBe('checkTimeoutMs');
     expect(validateConfig({ maxOutputBytes: 1.5 }).issues[0]?.key).toBe('maxOutputBytes');
+  });
+
+  it('accepts a limit at its ceiling and rejects one past it', () => {
+    expect(validateValues({ checkTimeoutMs: MAX_CHECK_TIMEOUT_MS, maxOutputBytes: MAX_CAPTURED_OUTPUT_BYTES }))
+      .toEqual({
+        checkTimeoutMs: MAX_CHECK_TIMEOUT_MS,
+        maxOutputBytes: MAX_CAPTURED_OUTPUT_BYTES,
+      });
+
+    // Both bounds size an allocation and a time window CL.EXE fills, so a
+    // client cannot ask for one without limit.
+    const overTimeout = validateConfig({ checkTimeoutMs: MAX_CHECK_TIMEOUT_MS + 1 });
+    expect(overTimeout.values).toEqual({});
+    expect(overTimeout.issues[0]?.key).toBe('checkTimeoutMs');
+    expect(overTimeout.issues[0]?.message).toContain(`at most ${MAX_CHECK_TIMEOUT_MS}`);
+
+    const overOutput = validateConfig({ maxOutputBytes: Number.MAX_SAFE_INTEGER });
+    expect(overOutput.values).toEqual({});
+    expect(overOutput.issues[0]?.key).toBe('maxOutputBytes');
+    expect(overOutput.issues[0]?.message).toContain(`at most ${MAX_CAPTURED_OUTPUT_BYTES}`);
+  });
+
+  it('holds a bound at its default when the value that would raise it is rejected', () => {
+    const base = defaultConfig();
+    const raised = mergeValidated(base, validateConfig({
+      checkTimeoutMs: MAX_CHECK_TIMEOUT_MS + 1,
+      maxOutputBytes: MAX_CAPTURED_OUTPUT_BYTES * 2,
+    }));
+    expect(raised.checkTimeoutMs).toBe(base.checkTimeoutMs);
+    expect(raised.maxOutputBytes).toBe(base.maxOutputBytes);
   });
 
   it('returns empty object for empty input object', () => {
@@ -420,6 +452,30 @@ describe('formatIssues', () => {  it('prefixes each issue with its source and ke
   it('reports a whole rejected source with no key', () => {
     expect(formatIssues('initializationOptions', [{ key: '', message: 'expected an object, got 42' }]))
       .toEqual(['msvc600-lsp: initializationOptions ignored: expected an object, got 42']);
+  });
+
+  it('strips control and bidi characters from a client-chosen key and message', () => {
+    // The key of an unknown option is whatever object key the client sent, and
+    // it reaches the LSP log verbatim; a newline in it would forge a second
+    // line, and a bidi override would reorder the one line around it.
+    const lines = formatIssues('initializationOptions', [
+      { key: 'evil\nmsvc600-lsp: MSVC600_* rejected wineExecutable: wine', message: 'unknown option' },
+      { key: 'warnLevel', message: 'expected an integer 0-4, got \u202e9' },
+    ]);
+    expect(lines).toEqual([
+      'msvc600-lsp: initializationOptions rejected evil?msvc600-lsp: MSVC600_* rejected wineExecutable: wine: unknown option',
+      'msvc600-lsp: initializationOptions rejected warnLevel: expected an integer 0-4, got ?9',
+    ]);
+  });
+
+  it('rejects a key the client chose to forge a log line', () => {
+    const forged = 'a\nb';
+    const { values, issues } = validateConfig(JSON.parse(`{${JSON.stringify(forged)}: 1}`));
+    expect(values).toEqual({});
+    expect(issues.map((i) => i.key)).toEqual([forged]);
+    expect(formatIssues('initializationOptions', issues)).toEqual([
+      'msvc600-lsp: initializationOptions rejected a?b: unknown option, ignored (check the spelling)',
+    ]);
   });
 });
 

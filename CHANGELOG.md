@@ -20,6 +20,20 @@ package version, not a published artifact.
 - The setup script's STL alias pass reads the truncated header from the MSVC tree instead
   of from the overlay it just wrote. Reading its own output made a rerun rebuild aliases
   from a previous run's leftovers, which no change to the source tree could reclaim.
+- A client-chosen option name could forge a log line. `validateConfig` reports an unknown
+  `initializationOptions` key by key name, and the name is whatever object key the client
+  sent. `formatIssues` interpolated it into the LSP log verbatim, so a newline in a key wrote a
+  second line and a bidi override reordered the first. The effective-configuration line
+  interpolated `clPath` and `wineExecutable`, free-form client strings, the same way. Every
+  logged line is now stripped of control, format, and bidi characters, the set `logging.ts`
+  already defined for compiler output.
+- `checkTimeoutMs` and `maxOutputBytes` had no upper bound. Both size something the client
+  controls directly: the window a check runs for, and the buffer its output accumulates in, so
+  a client could ask for a check that holds memory without limit. A value past
+  `MAX_CHECK_TIMEOUT_MS` (600000) or `MAX_CAPTURED_OUTPUT_BYTES` (67108864) is now rejected and
+  reported by name, leaving the previous bound in place.
+- `src/scheduler.ts` was removed while `src/server.ts` still imported it, so the type check and
+  the server build both failed on a missing module.
 - Scratch-source staging lives in one module again. `tempfile.ts` owns the `TempFileStore`
   boundary and the sweep, while `compiler.ts` carried a second write path with its own copy of
   the name prefix and no exclusive-create or size check, plus two helpers no caller used. One

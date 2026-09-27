@@ -1,5 +1,6 @@
 import * as path from 'path';
 import { WINE_MSVC_BASE } from './wine-path';
+import { sanitizeForLog } from './logging';
 
 /** Valid MSVC 6.0 warning levels: 0 (none) through 4 (most verbose). */
 export type WarnLevel = 0 | 1 | 2 | 3 | 4;
@@ -56,9 +57,16 @@ export interface Msvc6Config {
   outputEncoding: string;
   /** Whether to invoke CL.EXE through Wine. */
   useWine: boolean;
-  /** Milliseconds a single CL.EXE check may run before it is killed. */
+  /**
+   * Milliseconds a single CL.EXE check may run before it is killed. A
+   * client-supplied value past {@link MAX_CHECK_TIMEOUT_MS} is rejected.
+   */
   checkTimeoutMs: number;
-  /** Cap on captured CL.EXE output; past it the tail of the diagnostics is dropped. */
+  /**
+   * Cap on captured CL.EXE output; past it the tail of the diagnostics is
+   * dropped. A client-supplied value past {@link MAX_CAPTURED_OUTPUT_BYTES} is
+   * rejected.
+   */
   maxOutputBytes: number;
 }
 
@@ -93,6 +101,18 @@ export const DEFAULT_CHECK_TIMEOUT_MS = 30_000;
 
 /** Cap on captured CL.EXE output. Past it the tail of the diagnostic list is lost. */
 export const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024;
+
+/**
+ * Ceilings on the two bounds a client supplies, whatever it asks for.
+ *
+ * `maxOutputBytes` becomes the buffer CL.EXE's output accumulates in and
+ * `checkTimeoutMs` the window it accumulates for, so a pair chosen without an
+ * upper bound lets a single check grow the server's memory for as long as it
+ * likes. A value past the ceiling is rejected and reported, which leaves the
+ * previous bound in place rather than silently substituting another.
+ */
+export const MAX_CHECK_TIMEOUT_MS = 600_000;
+export const MAX_CAPTURED_OUTPUT_BYTES = 64 * 1024 * 1024;
 
 /**
  * The `/I` entry for a given base and Wine mode. Under Wine the headers are
@@ -166,11 +186,16 @@ export function validateConfig(raw: unknown): ConfigValidation {
     }
   };
 
-  const takePositiveInt = (key: 'checkTimeoutMs' | 'maxOutputBytes'): void => {
+  const takeBoundedInt = (key: 'checkTimeoutMs' | 'maxOutputBytes', ceiling: number): void => {
     const value = obj[key];
     if (value === undefined) return;
-    if (typeof value === 'number' && Number.isInteger(value) && value > 0) result[key] = value;
-    else issues.push({ key, message: `expected a positive integer, got ${describe(value)}` });
+    if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+      issues.push({ key, message: `expected a positive integer, got ${describe(value)}` });
+    } else if (value > ceiling) {
+      issues.push({ key, message: `must be at most ${ceiling}, got ${describe(value)}` });
+    } else {
+      result[key] = value;
+    }
   };
 
   takeString('msvcBasePath');
@@ -178,8 +203,8 @@ export function validateConfig(raw: unknown): ConfigValidation {
   takeString('wineExecutable');
   takeStringArray('includePaths');
   takeStringArray('additionalFlags');
-  takePositiveInt('checkTimeoutMs');
-  takePositiveInt('maxOutputBytes');
+  takeBoundedInt('checkTimeoutMs', MAX_CHECK_TIMEOUT_MS);
+  takeBoundedInt('maxOutputBytes', MAX_CAPTURED_OUTPUT_BYTES);
 
   if (obj.warnLevel !== undefined) {
     const level = obj.warnLevel;
@@ -396,11 +421,20 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): ConfigValid
   };
 }
 
-/** Formats validation issues as one log line each, prefixed with the source name. */
+/**
+ * Formats validation issues as one log line each, prefixed with the source name.
+ *
+ * Every field is sanitized: `key` and `message` carry whatever the client sent,
+ * and an issue key is an object key, which the client chooses freely. A newline
+ * or a bidi control in either would otherwise forge a log line, reorder the
+ * text around it, or render two different rejected keys identically.
+ */
 export function formatIssues(source: string, issues: readonly ConfigIssue[]): string[] {
   return issues.map((issue) =>
-    issue.key === ''
-      ? `msvc600-lsp: ${source} ignored: ${issue.message}`
-      : `msvc600-lsp: ${source} rejected ${issue.key}: ${issue.message}`,
+    sanitizeForLog(
+      issue.key === ''
+        ? `msvc600-lsp: ${source} ignored: ${issue.message}`
+        : `msvc600-lsp: ${source} rejected ${issue.key}: ${issue.message}`,
+    ),
   );
 }

@@ -49,9 +49,16 @@ export interface Msvc6Config {
     outputEncoding: string;
     /** Whether to invoke CL.EXE through Wine. */
     useWine: boolean;
-    /** Milliseconds a single CL.EXE check may run before it is killed. */
+    /**
+     * Milliseconds a single CL.EXE check may run before it is killed. A
+     * client-supplied value past {@link MAX_CHECK_TIMEOUT_MS} is rejected.
+     */
     checkTimeoutMs: number;
-    /** Cap on captured CL.EXE output; past it the tail of the diagnostics is dropped. */
+    /**
+     * Cap on captured CL.EXE output; past it the tail of the diagnostics is
+     * dropped. A client-supplied value past {@link MAX_CAPTURED_OUTPUT_BYTES} is
+     * rejected.
+     */
     maxOutputBytes: number;
 }
 /** A configuration value that was rejected, with the reason it was dropped. */
@@ -79,6 +86,17 @@ export declare const DEFAULT_WINE_EXECUTABLE = "wine";
 export declare const DEFAULT_CHECK_TIMEOUT_MS = 30000;
 /** Cap on captured CL.EXE output. Past it the tail of the diagnostic list is lost. */
 export declare const DEFAULT_MAX_OUTPUT_BYTES: number;
+/**
+ * Ceilings on the two bounds a client supplies, whatever it asks for.
+ *
+ * `maxOutputBytes` becomes the buffer CL.EXE's output accumulates in and
+ * `checkTimeoutMs` the window it accumulates for, so a pair chosen without an
+ * upper bound lets a single check grow the server's memory for as long as it
+ * likes. A value past the ceiling is rejected and reported, which leaves the
+ * previous bound in place rather than silently substituting another.
+ */
+export declare const MAX_CHECK_TIMEOUT_MS = 600000;
+export declare const MAX_CAPTURED_OUTPUT_BYTES: number;
 /**
  * The `/I` entry for a given base and Wine mode. Under Wine the headers are
  * read from the case-insensitive overlay in the prefix rather than from
@@ -142,6 +160,13 @@ export declare const ENV_NAMES: readonly string[];
  * the user meant.
  */
 export declare function configFromEnv(env?: NodeJS.ProcessEnv): ConfigValidation;
-/** Formats validation issues as one log line each, prefixed with the source name. */
+/**
+ * Formats validation issues as one log line each, prefixed with the source name.
+ *
+ * Every field is sanitized: `key` and `message` carry whatever the client sent,
+ * and an issue key is an object key, which the client chooses freely. A newline
+ * or a bidi control in either would otherwise forge a log line, reorder the
+ * text around it, or render two different rejected keys identically.
+ */
 export declare function formatIssues(source: string, issues: readonly ConfigIssue[]): string[];
 //# sourceMappingURL=config.d.ts.map

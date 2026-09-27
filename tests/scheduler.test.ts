@@ -1,7 +1,27 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createDebouncer, createManualScheduler, realScheduler } from '../src/scheduler';
 
 const DEBOUNCE_MS = 300;
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe('realScheduler', () => {
+  it('runs the task after the delay and honours the returned cancel', () => {
+    vi.useFakeTimers();
+    const ran: string[] = [];
+
+    realScheduler.schedule(DEBOUNCE_MS, () => ran.push('first'));
+    vi.advanceTimersByTime(DEBOUNCE_MS);
+    expect(ran).toEqual(['first']);
+
+    const cancel = realScheduler.schedule(DEBOUNCE_MS, () => ran.push('second'));
+    cancel();
+    vi.advanceTimersByTime(DEBOUNCE_MS);
+    expect(ran).toEqual(['first']);
+  });
+});
 
 describe('createManualScheduler', () => {
   it('runs nothing until time is advanced', () => {
