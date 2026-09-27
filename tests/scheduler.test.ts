@@ -1,29 +1,42 @@
 import { describe, it, expect } from 'vitest';
-import { createDebouncer, realScheduler, Scheduler } from '../src/scheduler';
+import { createDebouncer, createManualScheduler, realScheduler } from '../src/scheduler';
 
 const DEBOUNCE_MS = 300;
 
-/** Scheduler whose clock only moves when a test says so. */
-function manualScheduler(): Scheduler & { advance(elapsedMs: number): void } {
-  const queue = new Map<() => void, number>();
-  return {
-    schedule(delayMs: number, task: () => void): () => void {
-      queue.set(task, delayMs);
-      return () => queue.delete(task);
-    },
-    advance(elapsedMs: number): void {
-      for (const [task, delayMs] of [...queue]) {
-        if (delayMs > elapsedMs) continue;
-        queue.delete(task);
-        task();
-      }
-    },
-  };
-}
+describe('createManualScheduler', () => {
+  it('runs nothing until time is advanced', () => {
+    const scheduler = createManualScheduler();
+    const ran: string[] = [];
+    scheduler.schedule(DEBOUNCE_MS, () => ran.push('a'));
+    expect(ran).toEqual([]);
+    expect(scheduler.pending.size).toBe(1);
+  });
+
+  it('runs only the tasks whose delay has elapsed', () => {
+    const scheduler = createManualScheduler();
+    const ran: string[] = [];
+    scheduler.schedule(100, () => ran.push('fast'));
+    scheduler.schedule(500, () => ran.push('slow'));
+    scheduler.advance(100);
+    expect(ran).toEqual(['fast']);
+    scheduler.advance(500);
+    expect(ran).toEqual(['fast', 'slow']);
+    expect(scheduler.pending.size).toBe(0);
+  });
+
+  it('honours the cancel function returned by schedule', () => {
+    const scheduler = createManualScheduler();
+    const ran: string[] = [];
+    const cancel = scheduler.schedule(DEBOUNCE_MS, () => ran.push('a'));
+    cancel();
+    scheduler.advance(DEBOUNCE_MS);
+    expect(ran).toEqual([]);
+  });
+});
 
 describe('createDebouncer', () => {
   it('collapses a burst for one key into a single run', () => {
-    const scheduler = manualScheduler();
+    const scheduler = createManualScheduler();
     const debouncer = createDebouncer(scheduler, DEBOUNCE_MS);
     const ran: string[] = [];
     for (const text of ['a', 'ab', 'abc']) {
@@ -34,7 +47,7 @@ describe('createDebouncer', () => {
   });
 
   it('keeps one run per key and fires them in scheduling order', () => {
-    const scheduler = manualScheduler();
+    const scheduler = createManualScheduler();
     const debouncer = createDebouncer(scheduler, DEBOUNCE_MS);
     const ran: string[] = [];
     debouncer.schedule('file:///a.c', () => ran.push('a'));
@@ -48,7 +61,7 @@ describe('createDebouncer', () => {
   });
 
   it('drops the pending run when the key is cancelled', () => {
-    const scheduler = manualScheduler();
+    const scheduler = createManualScheduler();
     const debouncer = createDebouncer(scheduler, DEBOUNCE_MS);
     const ran: string[] = [];
     debouncer.schedule('file:///a.c', () => ran.push('a'));
@@ -59,7 +72,7 @@ describe('createDebouncer', () => {
   });
 
   it('drops every pending run on cancelAll', () => {
-    const scheduler = manualScheduler();
+    const scheduler = createManualScheduler();
     const debouncer = createDebouncer(scheduler, DEBOUNCE_MS);
     const ran: string[] = [];
     debouncer.schedule('file:///a.c', () => ran.push('a'));

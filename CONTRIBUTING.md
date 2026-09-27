@@ -20,12 +20,13 @@ bun run check
 ```
 
 `check` is the whole local gate, in order: `shellcheck scripts/*.sh`, then `tsc --noEmit` over
-`src/` plus `tsc -p tsconfig.test.json` over `src/` and `tests/`, then the full test suite. Run
-`bun run check` before every push. CI (`.github/workflows/ci.yml`) runs that same gate on Linux,
-preceded by `bun install --frozen-lockfile` so a lockfile that no longer resolves fails the build
-instead of being rewritten, and runs the typecheck, test suite and build on Linux, macOS and
-Windows. It installs no Wine, so the CL.EXE integration tests skip themselves there and only the
-tests that need no toolchain actually execute. `bun run ci` is the CI sequence locally.
+`src/` plus `tsc -p tsconfig.test.json` over `src/` and `tests/`, then `tsc` emitting `dist/`, then
+the full test suite. Run `bun run check` before every push. CI (`.github/workflows/ci.yml`) runs
+that same gate on Linux, preceded by `bun install --frozen-lockfile` so a lockfile that no longer
+resolves fails the build instead of being rewritten, and runs the typecheck, test suite and build
+on Linux, macOS and Windows. It installs no Wine, so the CL.EXE integration tests skip themselves
+there and only the tests that need no toolchain actually execute. `bun run ci` is the CI sequence
+locally.
 
 `tsconfig.json` is the build config and emits `dist/` from `src/` alone. `tsconfig.test.json`
 extends it with `noEmit` to type-check the test tree, which the build config excludes. Both are
@@ -34,13 +35,20 @@ test run.
 
 ## Test layout
 
-- `tests/config.test.ts`, `tests/cli.test.ts`, `tests/wine-path.test.ts`, `tests/diagnostics.test.ts`,
-  and the non-toolchain half of `tests/compiler.test.ts` need no external process.
-  `bun run test:unit` runs those files.
-- The `describeWithToolchain` blocks in `tests/compiler.test.ts` and `tests/server.test.ts`, plus
-  the `LSP Server tool failure signalling` block in `tests/server.test.ts`, spawn the real
-  `CL.EXE` through Wine and skip themselves when Wine or `VC/VC98` is absent. Put pure logic
-  tests in the unit files, outside `describeWithToolchain`, so they stay runnable everywhere.
+Only `tests/compiler.test.ts` and `tests/server.test.ts` spawn the real toolchain or the built
+server; every other file is pure logic and runs anywhere.
+
+- `bun run test:unit` runs everything except those two, which is the fast loop: no Wine, no
+  MSVC 6.0 tree, no `tsc` emit. Add a new test file there by default.
+- The `describeWithToolchain` blocks in `tests/compiler.test.ts` and `tests/server.test.ts` spawn
+  the real `CL.EXE` through Wine and skip themselves when Wine or `VC/VC98` is absent. The rest of
+  those two files still runs: `describe('command line')` and
+  `describe('LSP Server tool failure signalling')` in `tests/server.test.ts` build `dist/` with
+  the locally installed `tsc` in `beforeAll` and point the server at a `clPath` that does not
+  exist, so neither needs MSVC 6.0.
+- `tests/tempfile.test.ts` and `tests/encoding.test.ts` write to a directory the test creates
+  rather than counting entries in `os.tmpdir()`: vitest runs files in parallel workers that share
+  it, so a count over the shared directory is order dependent.
 - `tests/fixtures/` holds the `.c` and `.cpp` inputs the compiler suite checks.
 - `tests/fuzz-diagnostics.test.ts` and `tests/fuzz-config.test.ts` fuzz the two parsers that
   take untrusted text: CL.EXE output and the client's `initializationOptions`. Each starts from a
@@ -54,6 +62,7 @@ Run one file or one test:
 ```bash
 bun run test tests/diagnostics.test.ts
 bun run test -t 'toLspDiagnostics'
+bun run test:watch
 ```
 
 ## Conventions
@@ -64,6 +73,9 @@ bun run test -t 'toLspDiagnostics'
   `noUncheckedIndexedAccess` is not on yet: `src/diagnostics.ts` destructures
   `RegExpExecArray` capture groups, which it types as possibly undefined.
 - `scripts/*.sh` are linted with ShellCheck and must pass `bun run lint` with no findings.
+- The debounce in `src/scheduler.ts` takes its timer as a `Scheduler`, so `tests/scheduler.test.ts`
+  steps elapsed time with `createManualScheduler` instead of sleeping. Anything else that depends
+  on wall-clock time follows the same shape.
 - Errors returned to the editor go through `parseDiagnostics` in `src/diagnostics.ts`; a new
   MSVC message format needs a test in `tests/diagnostics.test.ts` next to the existing ones.
 - Comments explain contracts and non-obvious constraints (why SIGKILL, why NFC normalization),

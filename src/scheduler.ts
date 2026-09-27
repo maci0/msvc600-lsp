@@ -4,8 +4,8 @@
  * The debounce that coalesces editor keystrokes is the only place the server's
  * behavior depends on elapsed wall-clock time: how many validations a burst of
  * edits produces, and which one wins, are decided by the timer. Keeping it
- * behind this interface lets a test step that timer explicitly instead of
- * sleeping in real time.
+ * behind this interface lets a simulated run step that timer explicitly
+ * instead of sleeping in real time.
  */
 export interface Scheduler {
   /** Runs `task` after `delayMs`. Returns a function that cancels it. */
@@ -19,6 +19,33 @@ export const realScheduler: Scheduler = {
     return () => clearTimeout(handle);
   },
 };
+
+/** {@link Scheduler} that never fires on its own; a driver runs the tasks. */
+export interface ManualScheduler extends Scheduler {
+  /** Delays, in ms, before each pending task would fire. */
+  readonly pending: ReadonlyMap<() => void, number>;
+  /** Runs every task whose delay is at most `elapsedMs`, in scheduling order. */
+  advance(elapsedMs: number): void;
+}
+
+/** {@link ManualScheduler} for a run that decides when time passes. */
+export function createManualScheduler(): ManualScheduler {
+  const queue = new Map<() => void, number>();
+  return {
+    pending: queue,
+    schedule(delayMs: number, task: () => void): () => void {
+      queue.set(task, delayMs);
+      return () => queue.delete(task);
+    },
+    advance(elapsedMs: number): void {
+      for (const [task, delayMs] of [...queue]) {
+        if (delayMs > elapsedMs) continue;
+        queue.delete(task);
+        task();
+      }
+    },
+  };
+}
 
 /** Keyed one-shot debounce over a {@link Scheduler}. */
 export interface Debouncer {

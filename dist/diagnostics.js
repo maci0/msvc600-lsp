@@ -34,7 +34,7 @@ function parseDiagnostics(output) {
             const [, file, lineNum, severity, code, message] = match;
             current = {
                 file: (0, wine_path_1.fromWinePath)(file),
-                line: parseInt(lineNum, 10),
+                line: parseLineNumber(lineNum),
                 severity: mapSeverity(severity),
                 code,
                 message,
@@ -58,6 +58,17 @@ function parseDiagnostics(output) {
         diagnostics.push(current);
     }
     return diagnostics;
+}
+/**
+ * The digits a diagnostic line carries are untrusted text: a filename or an
+ * included header can print a number long enough to overflow `Number`, and
+ * `parseInt` answers that with `Infinity`. A line that overflows is no
+ * position at all, so it is pinned to the last addressable line rather than
+ * passed on as a value the LSP range arithmetic cannot use.
+ */
+function parseLineNumber(text) {
+    const value = Number.parseInt(text, 10);
+    return Number.isFinite(value) ? value : exports.LSP_UINT_MAX;
 }
 function mapSeverity(severity) {
     switch (severity) {

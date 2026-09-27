@@ -23,7 +23,11 @@ Debouncing (300 ms) and abort-on-stale ensure only the latest edit triggers a ch
 - **Wine** (Linux/macOS) or native Windows
 - **MSVC 6.0 installation**: `VC/VC98/{BIN,INCLUDE,LIB}` must be present at the package root, since that path is the default `msvcBasePath`. On Linux, `bun run setup` mirrors the tree into the Wine prefix (`$WINEPREFIX/drive_c/msvc6`, or `~/.wine/drive_c/msvc6` when `WINEPREFIX` is unset) with a lowercased copy of every file, because MSVC headers use mixed-case `#include` lines that do not resolve on a case-sensitive filesystem. The script is Linux-only (it writes to the prefix's `drive_c`), so on macOS point `includePaths` at `VC/VC98/INCLUDE` instead.
 
-The test suite is an integration suite: it spawns the real `CL.EXE` through Wine, so Wine and an MSVC 6.0 install are required to run `bun run test`.
+Part of the test suite is an integration suite: the `describeWithToolchain` blocks in
+`tests/compiler.test.ts` and `tests/server.test.ts` spawn the real `CL.EXE` through Wine, so Wine
+and an MSVC 6.0 install are needed for those. Without them they skip themselves and say why on
+stderr, and `bun run test` still passes on the remaining files; `bun run test:unit` runs only
+those and needs neither.
 
 ## Installation
 
@@ -208,10 +212,10 @@ bun run setup         # Mirror MSVC6 into the Wine prefix with lowercased copies
 bun run build         # Compile TypeScript
 bun run typecheck     # Type-check src/ and tests/
 bun run test          # Run test suite
-bun run test:unit     # Tests that run without Wine or an MSVC 6.0 install
+bun run test:unit     # Fast loop: every test file that needs no Wine, MSVC 6.0 or tsc emit
 bun run test:watch    # Watch mode
 bun run watch         # Watch + compile
-bun run check         # The pre-push gate: shellcheck, typecheck, then the full test suite (needs a POSIX shell)
+bun run check         # The pre-push gate: shellcheck, typecheck, build, then the full test suite (needs a POSIX shell)
 bun run ci            # What CI runs: frozen-lockfile install, then check
 ```
 

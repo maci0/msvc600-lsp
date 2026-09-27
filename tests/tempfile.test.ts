@@ -279,12 +279,19 @@ describe('createTempSource', () => {
     expect(fs.statSync(tempFile).mode & 0o777).toBe(0o600);
   });
 
+  // Counts a directory this test owns, not os.tmpdir(): test files run in
+  // parallel workers that share the OS temp directory, so a count taken across
+  // the shared one can see a sibling worker's file appear mid-assertion.
   it('refuses content over the syntax-check size limit, leaving no file behind', () => {
-    const before = fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('msvc6_lsp_')).length;
-    const oversized = 'a'.repeat(MAX_SOURCE_BYTES + 1);
-    expect(() => createTempSource(oversized, '.c')).toThrow(DocumentTooLargeError);
-    const after = fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('msvc6_lsp_')).length;
-    expect(after).toBe(before);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'msvc600-tmpstore-'));
+    try {
+      const store = createSystemTempFileStore({ dir });
+      const oversized = 'a'.repeat(MAX_SOURCE_BYTES + 1);
+      expect(() => store.write(oversized, '.c')).toThrow(DocumentTooLargeError);
+      expect(fs.readdirSync(dir)).toEqual([]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
