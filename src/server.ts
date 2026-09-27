@@ -12,8 +12,8 @@ import {
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { URI } from 'vscode-uri';
-import * as fs from 'fs';
 import * as path from 'path';
+import * as fs from 'fs';
 import {
   Msvc6Config,
   defaultConfig,
@@ -27,13 +27,14 @@ import {
 } from './config';
 import {
   syntaxCheck,
-  stripByteOrderMark,
   createTempSourcePath,
+  removeTempSourceFile,
   sweepStaleTempFiles,
   DocumentTooLargeError,
   MAX_SOURCE_BYTES,
   COMPILE_TIMEOUT_MS,
   MAX_OUTPUT_BYTES,
+  stripByteOrderMark,
 } from './compiler';
 import { parseDiagnostics, toLspDiagnostics, toFailureDiagnostic, LSP_UINT_MAX } from './diagnostics';
 import { sanitizeForLog } from './logging';
@@ -61,6 +62,14 @@ const validationSequencer = new ValidationSequencer();
 const pendingValidations = new Map<string, NodeJS.Timeout>();
 
 const DEBOUNCE_MS = 300;
+
+/** Drops a document's pending debounce timer, if one is still waiting. */
+function clearPendingValidation(uri: string): void {
+  const pending = pendingValidations.get(uri);
+  if (!pending) return;
+  clearTimeout(pending);
+  pendingValidations.delete(uri);
+}
 
 /**
  * At most this many CL.EXE children exist at once. Each check is a heavyweight
@@ -207,8 +216,7 @@ connection.onDidChangeConfiguration((change) => {
 
 documents.onDidChangeContent((change) => {
   const uri = change.document.uri;
-  const existing = pendingValidations.get(uri);
-  if (existing) clearTimeout(existing);
+  clearPendingValidation(uri);
   pendingValidations.set(
     uri,
     setTimeout(() => {
@@ -221,22 +229,13 @@ documents.onDidChangeContent((change) => {
 });
 
 documents.onDidSave((change) => {
-  const uri = change.document.uri;
-  const pending = pendingValidations.get(uri);
-  if (pending) {
-    clearTimeout(pending);
-    pendingValidations.delete(uri);
-  }
+  clearPendingValidation(change.document.uri);
   scheduleValidation(change.document);
 });
 
 documents.onDidClose((event) => {
   const uri = event.document.uri;
-  const pending = pendingValidations.get(uri);
-  if (pending) {
-    clearTimeout(pending);
-    pendingValidations.delete(uri);
-  }
+  clearPendingValidation(uri);
   validationQueue.cancel(uri);
   validationSequencer.close(uri);
   connection.sendDiagnostics({ uri, diagnostics: [] });
@@ -295,11 +294,9 @@ function scheduleValidation(textDocument: TextDocument): void {
   const uri = textDocument.uri;
   const handle = validationSequencer.begin(uri);
 
-  const langId = CPP_EXTENSIONS.includes(ext)
-    ? 'cpp'
-    : textDocument.languageId === 'cpp'
-      ? 'cpp'
-      : 'c';
+  // A .h document carries the language id its client assigned; every other
+  // supported extension is decided by the extension itself.
+  const langId = CPP_EXTENSIONS.includes(ext) || textDocument.languageId === 'cpp' ? 'cpp' : 'c';
   const tempFile = createTempSourcePath(langId);
   // Content and temp path are snapshotted at submission so a queued check
   // never re-reads a document that has since changed.
@@ -380,11 +377,7 @@ async function runValidation(
     });
     connection.console.error(`Validation error (${uri}): ${String(e)}`);
   } finally {
-    try {
-      fs.unlinkSync(tempFile);
-    } catch {
-      // Temp file may already be gone or was never created.
-    }
+    removeTempSourceFile(tempFile);
   }
 }
 
@@ -413,9 +406,4 @@ try {
   connection.console.error(`Stale temp sweep failed: ${String(e)}`);
 }
 
-/** Returns the current live config — typed `Readonly` to prevent accidental mutation. */
-function getConfig(): Readonly<Msvc6Config> {
-  return config;
-}
-
-export { connection, documents, getConfig, scheduleValidation };
+export { connection, documents, scheduleValidation };
