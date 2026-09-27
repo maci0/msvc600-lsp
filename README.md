@@ -66,6 +66,8 @@ src/
 **Key design decisions:**
 
 - **Temp files + abort controllers**: Each validation writes to a unique temp file and tracks an `AbortController`. New edits abort stale in-flight checks.
+- **Process-group kill**: Each check spawns CL.EXE in its own process group. Because Wine runs CL.EXE as a grandchild, a timeout or abort signals the whole group, so no CL.EXE is left running after the server moves on.
+- **Shutdown teardown**: `shutdown` clears pending debounce timers, aborts in-flight checks, disposes the client configuration watcher, and waits for the cancelled checks to unlink their temp files.
 - **Sequence numbers**: A per-URI counter discards results from stale validations that complete after a newer one started.
 - **Security boundary**: Runtime config changes are restricted to non-executable fields to prevent CL.EXE flag injection.
 
