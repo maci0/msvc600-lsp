@@ -18,15 +18,6 @@ class TaskQueue {
         }
         this.concurrency = concurrency;
     }
-    /** True while an entry for `key` is queued or running. */
-    has(key) {
-        return this.byKey.has(key);
-    }
-    /** True while an entry for `key` is inside `run`. */
-    isRunning(key) {
-        const entry = this.byKey.get(key);
-        return entry !== undefined && this.running.has(entry);
-    }
     /** Number of entries waiting for a free slot. */
     get pending() {
         return this.queue.length;
@@ -97,9 +88,13 @@ class TaskQueue {
         this.settleWaiters();
     }
     dispatch(entry) {
-        // The runner owns its own rejection; reporting it here would make a
-        // transient compile failure an unhandled rejection.
-        void entry.run(entry.controller.signal).then(() => this.finish(entry), () => this.finish(entry));
+        // The runner owns its own rejection; letting it through would make a
+        // transient compile failure an unhandled rejection. Swallow it here so
+        // `finish` runs exactly once either way.
+        void entry
+            .run(entry.controller.signal)
+            .catch(() => undefined)
+            .then(() => this.finish(entry));
     }
     finish(entry) {
         this.running.delete(entry);

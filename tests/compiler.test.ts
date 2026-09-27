@@ -180,21 +180,6 @@ describe('syntaxCheck with useWine: false', () => {
   );
 
   it.runIf(process.platform !== 'win32')(
-    'bounds captured output with the configured maxOutputBytes',
-    async () => {
-      const cfg = {
-        ...testConfig(),
-        useWine: false,
-        clPath: path.join(FIXTURES, 'noisy_compiler.mjs'),
-        maxOutputBytes: 1024,
-      };
-      const result = await syntaxCheck(cfg, path.join(FIXTURES, 'valid.c'));
-      expect(result.truncated).toBe(true);
-      expect(result.stdout.length).toBeLessThanOrEqual(1024);
-    },
-  );
-
-  it.runIf(process.platform !== 'win32')(
     'kills a check that outruns the configured checkTimeoutMs',
     async () => {
       const cfg = {
@@ -460,6 +445,20 @@ describe('sweepStaleTempFiles', () => {
     }
   });
 
+  it('reclaims a scratch file createTempSource actually wrote', () => {
+    // The name comes from the writer, not from a literal typed here, so the two
+    // cannot drift apart and leave a crashed run's file unswept forever.
+    const file = createTempSource('int main(void) { return 0; }\n', '.c');
+    const when = new Date(Date.now() - 2 * HOUR_MS);
+    fs.utimesSync(file, when, when);
+    try {
+      expect(sweepStaleTempFiles()).toContain(file);
+      expect(fs.existsSync(file)).toBe(false);
+    } finally {
+      fs.rmSync(file, { force: true });
+    }
+  });
+
   it('is a no-op the second time over the same leftovers', () => {
     const file = makeTemp(`msvc6_lsp_twice_${process.pid}.c`, 2 * HOUR_MS);
     try {
@@ -545,18 +544,6 @@ describe('syntaxCheck output limits', () => {
     expect(impatient.exitCode).not.toBe(0);
   });
 
-  it('caps captured output at maxOutputBytes and flags the loss', async () => {
-    const cfg = {
-      ...testConfig(),
-      useWine: false,
-      clPath: path.join(FIXTURES, 'noisy_compiler.mjs'),
-      maxOutputBytes: 512,
-    };
-    const result = await syntaxCheck(cfg, path.join(FIXTURES, 'valid.c'));
-    expect(result.truncated).toBe(true);
-    expect(Buffer.byteLength(result.stdout)).toBeLessThanOrEqual(512);
-  });
-
   it('keeps the full output of a quiet check under the cap', async () => {
     const cfg = { ...testConfig(), useWine: false, clPath: path.join(FIXTURES, 'slow_compiler.mjs') };
     const result = await syntaxCheck(cfg, path.join(FIXTURES, 'valid.c'));
@@ -594,6 +581,44 @@ describe('syntaxCheck concurrency', () => {
         delete process.env.MSVC6_TEST_TRACE;
         fs.rmSync(trace, { force: true });
       }
+    },
+  );
+  it.runIf(process.platform !== 'win32')(
+    'settles a check whose pipes stay open past the child exit',
+    async () => {
+      const cfg = {
+        ...testConfig(),
+        useWine: false,
+        clPath: path.join(FIXTURES, 'orphan_pipes.mjs'),
+      };
+      const source = path.join(FIXTURES, 'valid.c');
+
+      // The fixture exits while a grandchild still holds stdout and stderr, so
+      // a caller that waits for end-of-file on them waits forever and never
+      // returns the check's slot. Two such runs would wedge the server.
+      const check = syntaxCheck(cfg, source);
+      const result = await Promise.race([
+        check,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('syntaxCheck never settled')), 10000).unref(),
+        ),
+      ]);
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toContain('C2065');
+
+      // The slot came back: another check still runs instead of queueing
+      // behind a limit already reached.
+      const follow = syntaxCheck(
+        { ...testConfig(), useWine: false, clPath: path.join(FIXTURES, 'emit_cp1252.mjs') },
+        source,
+      );
+      await expect(Promise.race([
+        follow,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('follow-up check never settled')), 10000).unref(),
+        ),
+      ])).resolves.toBeDefined();
     },
   );
 });

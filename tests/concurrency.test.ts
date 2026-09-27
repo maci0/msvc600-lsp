@@ -50,7 +50,12 @@ describe('Semaphore', () => {
   it('never lets a new caller barge past a queued waiter', async () => {
     const sem = new Semaphore(1);
     const first = await sem.acquire();
-    const second = sem.acquire();
+
+    let secondAcquired = false;
+    const second = sem.acquire().then((release) => {
+      secondAcquired = true;
+      return release;
+    });
     await delay(1);
     expect(secondAcquired).toBe(false);
 

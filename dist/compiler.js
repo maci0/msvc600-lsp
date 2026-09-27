@@ -37,7 +37,6 @@ exports.DocumentTooLargeError = exports.MAX_OUTPUT_BYTES = exports.COMPILE_TIMEO
 exports.buildArgs = buildArgs;
 exports.createTempSource = createTempSource;
 exports.syntaxCheck = syntaxCheck;
-exports.createTempSourcePath = createTempSourcePath;
 exports.sweepStaleTempFiles = sweepStaleTempFiles;
 exports.stripByteOrderMark = stripByteOrderMark;
 exports.createTempSourceFile = createTempSourceFile;
@@ -50,10 +49,10 @@ const os = __importStar(require("os"));
 const path = __importStar(require("path"));
 const util_1 = require("util");
 const config_1 = require("./config");
+const encoding_1 = require("./encoding");
 const wine_path_1 = require("./wine-path");
 const tempfile_1 = require("./tempfile");
-/** Scratch sources are named with this prefix so a crashed run leaves identifiable leftovers. */
-const TEMP_SOURCE_PREFIX = 'msvc6_lsp_';
+const concurrency_1 = require("./concurrency");
 /** Suffixes a scratch source may carry. */
 const TEMP_SOURCE_EXTENSIONS = ['.c', '.cpp'];
 /**
@@ -64,12 +63,30 @@ const TEMP_SOURCE_EXTENSIONS = ['.c', '.cpp'];
 const STALE_TEMP_MIN_AGE_MS = 60 * 60 * 1000;
 /** Upper bound on the source text handed to a syntax check. */
 exports.MAX_SOURCE_BYTES = 8 * 1024 * 1024;
-/** Concurrent CL.EXE children allowed at once; each one is a Wine process. */
-exports.MAX_CONCURRENT_CHECKS = 4;
+/**
+ * Concurrent CL.EXE children allowed at once. Each one is a heavyweight process
+ * (a full Wine services startup on non-Windows), so the number is kept at the
+ * parallelism a developer machine absorbs; the rest queue rather than dropping.
+ * The server schedules through the same number, so the two layers of the
+ * pipeline agree on one limit.
+ */
+exports.MAX_CONCURRENT_CHECKS = 2;
 /** Wall-clock limit for one CL.EXE run before the process is killed. */
 exports.COMPILE_TIMEOUT_MS = 30000;
 /** Cap on captured stdout and stderr, per stream. */
 exports.MAX_OUTPUT_BYTES = 1024 * 1024;
+/**
+ * How long the child's stdout and stderr keep being read after the child
+ * itself has exited, measured from the last byte that arrives. Output the
+ * child wrote before exiting is already in the pipe, so this only has to
+ * outlast a slow reader.
+ */
+const STDIO_DRAIN_IDLE_MS = 500;
+/**
+ * Ceiling on that read after the child's exit, so a grandchild that keeps
+ * writing slowly cannot hold the pipes open indefinitely.
+ */
+const STDIO_DRAIN_MAX_MS = 5000;
 /**
  * Builds the CL.EXE argument list for a syntax-only check.
  * Selects /TC (C) or /TP (C++) based on file extension.
@@ -115,9 +132,11 @@ function getExitCode(error) {
 /**
  * Decodes CL.EXE output bytes. A `TextDecoder` never throws on malformed
  * input, so undecodable bytes become U+FFFD rather than aborting the check.
+ * A stream that produced nothing, or one closed before it was read, arrives as
+ * no buffer at all and decodes to the empty string.
  */
 function decodeOutput(bytes, decoder) {
-    return decoder.decode(bytes);
+    return bytes === null || bytes === undefined ? '' : decoder.decode(bytes);
 }
 /**
  * Whether the child was killed by the exec timeout rather than by the caller.
@@ -139,7 +158,8 @@ class DocumentTooLargeError extends Error {
 exports.DocumentTooLargeError = DocumentTooLargeError;
 /**
  * Writes `content` to a fresh temp file with the given extension and returns
- * its path. The caller owns the file and must unlink it.
+ * its path. The bytes written are the prepared UTF-8 source, so the size check
+ * and the file on disk agree. The caller owns the file and must unlink it.
  *
  * The create is exclusive (`wx`): a path that already exists in the shared
  * temp directory is an error rather than something to truncate, so a file or
@@ -147,32 +167,15 @@ exports.DocumentTooLargeError = DocumentTooLargeError;
  * applies only to a file this call creates, which is why the flag matters.
  */
 function createTempSource(content, ext) {
-    const body = stripByteOrderMark(content);
-    const byteLength = Buffer.byteLength(body, 'utf-8');
-    if (byteLength > exports.MAX_SOURCE_BYTES) {
-        throw new DocumentTooLargeError(byteLength);
+    const body = (0, encoding_1.encodeSourceText)(content);
+    if (body.byteLength > exports.MAX_SOURCE_BYTES) {
+        throw new DocumentTooLargeError(body.byteLength);
     }
-    const tempFile = path.join(os.tmpdir(), `msvc6_lsp_${(0, crypto_1.randomUUID)()}${ext}`);
+    const tempFile = path.join(os.tmpdir(), `${tempfile_1.TEMP_PREFIX}${(0, crypto_1.randomUUID)()}${ext}`);
     fs.writeFileSync(tempFile, body, { encoding: 'utf-8', mode: 0o600, flag: 'wx' });
     return tempFile;
 }
-let activeChecks = 0;
-const checkQueue = [];
-function acquireCheckSlot() {
-    if (activeChecks < exports.MAX_CONCURRENT_CHECKS) {
-        activeChecks += 1;
-        return Promise.resolve();
-    }
-    return new Promise((resolve) => checkQueue.push(resolve));
-}
-function releaseCheckSlot() {
-    const next = checkQueue.shift();
-    if (next) {
-        next();
-        return;
-    }
-    activeChecks -= 1;
-}
+const checkSlots = new concurrency_1.Semaphore(exports.MAX_CONCURRENT_CHECKS);
 function abortError() {
     const error = new Error('CL.EXE check aborted');
     error.code = 'ABORT_ERR';
@@ -183,7 +186,8 @@ function abortError() {
  *
  * At most {@link MAX_CONCURRENT_CHECKS} children run at once; the rest queue,
  * so a burst of open documents cannot spawn an unbounded number of Wine
- * processes. A queued check whose signal aborts is dropped before it starts.
+ * processes. A queued check whose signal aborts leaves the queue without ever
+ * taking a slot.
  *
  * Always resolves — compiler errors are reported via `exitCode` and
  * `rawOutput`, not via promise rejection. Rejects only when no check could
@@ -193,16 +197,16 @@ function abortError() {
  * exit code that carries no diagnostic meaning.
  */
 async function syntaxCheck(config, filePath, opts = {}) {
-    if (opts.signal?.aborted)
+    const release = await checkSlots.acquire(opts.signal);
+    if (release === null)
         throw abortError();
-    await acquireCheckSlot();
     try {
         if (opts.signal?.aborted)
             throw abortError();
         return await runCheck(config, filePath, opts);
     }
     finally {
-        releaseCheckSlot();
+        release();
     }
 }
 function runCheck(config, filePath, opts) {
@@ -225,18 +229,32 @@ function runCheck(config, filePath, opts) {
                 `${JSON.stringify(config.outputEncoding)} (${e.message})`));
             return;
         }
-        (0, child_process_1.execFile)(executable, execArgs, 
+        // execFile settles its callback on the child's 'close', which waits for the
+        // stdout and stderr pipes to reach end-of-file. A grandchild that inherited
+        // them keeps them open past the child's own exit, and the callback then
+        // never fires: the check's promise never settles, so its semaphore slot is
+        // never released and its scratch file is never unlinked. A Wine run is
+        // exactly this shape, so the pipes are dropped once the child is gone, the
+        // reader has gone quiet, and the hard cap has passed.
+        let stdioDropped = false;
+        let settled = false;
+        const child = (0, child_process_1.execFile)(executable, execArgs, 
         // killSignal: SIGKILL because Wine ignores SIGTERM reliably.
+        // timeout and maxBuffer come from the config so a user can bound a
+        // runaway Wine or a chatty CL.EXE per machine.
         // encoding: 'buffer' keeps the raw code-page bytes; they are decoded
         // below with the configured output encoding, not assumed to be UTF-8.
+        // timeout and maxBuffer come from the config, so a client that raises or
+        // lowers checkTimeoutMs and maxOutputBytes gets what it asked for.
         {
             env,
-            timeout: opts.timeoutMs ?? exports.COMPILE_TIMEOUT_MS,
-            maxBuffer: exports.MAX_OUTPUT_BYTES,
+            timeout: opts.timeoutMs ?? config.checkTimeoutMs,
+            maxBuffer: config.maxOutputBytes,
             signal: opts.signal,
             killSignal: 'SIGKILL',
             encoding: 'buffer',
         }, (error, stdoutBytes, stderrBytes) => {
+            settled = true;
             const stdout = decodeOutput(stdoutBytes, decoder);
             const stderr = decodeOutput(stderrBytes, decoder);
             if (error) {
@@ -250,24 +268,44 @@ function runCheck(config, filePath, opts) {
                     return;
                 }
             }
-            const truncated = error != null &&
+            const hitMaxBuffer = error != null &&
                 typeof error.code === 'string' &&
                 error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
-            const timedOut = !truncated && isTimeoutKill(error);
+            // Output cut short by the pipe being dropped counts as truncation, the
+            // same as output cut short by the buffer: a missing diagnostic is
+            // incomplete, not absent.
+            const truncated = hitMaxBuffer || stdioDropped;
+            const timedOut = !hitMaxBuffer && !stdioDropped && isTimeoutKill(error);
             const exitCode = getExitCode(error);
             const rawOutput = stdout + '\n' + stderr;
             resolve({ stdout, stderr, exitCode, rawOutput, truncated, timedOut });
         });
+        child.once('exit', () => {
+            // The pipes already reached end-of-file; nothing is left to wait for.
+            if (settled)
+                return;
+            let idle;
+            const cap = setTimeout(drop, STDIO_DRAIN_MAX_MS);
+            function drop() {
+                clearTimeout(idle);
+                clearTimeout(cap);
+                if (settled || stdioDropped)
+                    return;
+                stdioDropped = true;
+                child.stdout?.destroy();
+                child.stderr?.destroy();
+            }
+            const armIdle = () => {
+                clearTimeout(idle);
+                idle = setTimeout(drop, STDIO_DRAIN_IDLE_MS);
+                idle.unref();
+            };
+            child.stdout?.on('data', armIdle);
+            child.stderr?.on('data', armIdle);
+            armIdle();
+            cap.unref();
+        });
     });
-}
-/**
- * Returns a fresh, unused path for a scratch source file. The random name
- * makes two concurrent checks of the same document independent rather than
- * overwriting each other's input.
- */
-function createTempSourcePath(languageId) {
-    const ext = languageId === 'cpp' ? '.cpp' : '.c';
-    return path.join(os.tmpdir(), `${TEMP_SOURCE_PREFIX}${(0, crypto_1.randomUUID)()}${ext}`);
 }
 /**
  * Deletes scratch sources left behind by a run that was killed before its
@@ -280,7 +318,7 @@ function createTempSourcePath(languageId) {
 function sweepStaleTempFiles(now = Date.now()) {
     const removed = [];
     for (const entry of fs.readdirSync(os.tmpdir())) {
-        if (!entry.startsWith(TEMP_SOURCE_PREFIX))
+        if (!entry.startsWith(tempfile_1.TEMP_PREFIX))
             continue;
         if (!TEMP_SOURCE_EXTENSIONS.some((ext) => entry.endsWith(ext)))
             continue;
@@ -319,7 +357,7 @@ function stripByteOrderMark(content) {
  * The caller owns the file and must pass the path to {@link removeTempSourceFile}.
  */
 function createTempSourceFile(content, ext) {
-    const tempFile = path.join(os.tmpdir(), `msvc6_lsp_${(0, crypto_1.randomUUID)()}${ext}`);
+    const tempFile = path.join(os.tmpdir(), `${tempfile_1.TEMP_PREFIX}${(0, crypto_1.randomUUID)()}${ext}`);
     fs.writeFileSync(tempFile, stripByteOrderMark(content), { encoding: 'utf-8', mode: 0o600 });
     return tempFile;
 }
@@ -342,7 +380,7 @@ function removeTempSourceFile(tempFile) {
 async function syntaxCheckContent(config, content, languageId, opts = {}) {
     const ext = languageId === 'cpp' ? '.cpp' : '.c';
     const store = opts.store ?? (0, tempfile_1.createSystemTempFileStore)();
-    const tempFile = store.write(stripByteOrderMark(content), ext);
+    const tempFile = store.write((0, encoding_1.prepareSourceText)(content), ext);
     try {
         const result = await syntaxCheck(config, tempFile);
         return { ...result, tempFile };

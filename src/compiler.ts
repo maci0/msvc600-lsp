@@ -7,11 +7,8 @@ import { TextDecoder } from 'util';
 import { Msvc6Config, CPP_EXTENSIONS, C_EXTENSIONS } from './config';
 import { encodeSourceText, prepareSourceText } from './encoding';
 import { toWinePath } from './wine-path';
-import { TempFileStore, createSystemTempFileStore } from './tempfile';
+import { TempFileStore, TEMP_PREFIX, createSystemTempFileStore } from './tempfile';
 import { Semaphore } from './concurrency';
-
-/** Scratch sources are named with this prefix so a crashed run leaves identifiable leftovers. */
-const TEMP_SOURCE_PREFIX = 'msvc6_lsp_';
 
 /** Suffixes a scratch source may carry. */
 const TEMP_SOURCE_EXTENSIONS: readonly string[] = ['.c', '.cpp'];
@@ -46,6 +43,20 @@ export const COMPILE_TIMEOUT_MS = 30000;
 
 /** Cap on captured stdout and stderr, per stream. */
 export const MAX_OUTPUT_BYTES = 1024 * 1024;
+
+/**
+ * How long the child's stdout and stderr keep being read after the child
+ * itself has exited, measured from the last byte that arrives. Output the
+ * child wrote before exiting is already in the pipe, so this only has to
+ * outlast a slow reader.
+ */
+const STDIO_DRAIN_IDLE_MS = 500;
+
+/**
+ * Ceiling on that read after the child's exit, so a grandchild that keeps
+ * writing slowly cannot hold the pipes open indefinitely.
+ */
+const STDIO_DRAIN_MAX_MS = 5000;
 
 /** Result of a CL.EXE syntax-check invocation. */
 export interface CompileResult {
@@ -114,9 +125,11 @@ function getExitCode(error: Error | null): number {
 /**
  * Decodes CL.EXE output bytes. A `TextDecoder` never throws on malformed
  * input, so undecodable bytes become U+FFFD rather than aborting the check.
+ * A stream that produced nothing, or one closed before it was read, arrives as
+ * no buffer at all and decodes to the empty string.
  */
-function decodeOutput(bytes: Buffer, decoder: TextDecoder): string {
-  return decoder.decode(bytes);
+function decodeOutput(bytes: Buffer | null | undefined, decoder: TextDecoder): string {
+  return bytes === null || bytes === undefined ? '' : decoder.decode(bytes);
 }
 
 /**
@@ -155,7 +168,7 @@ export function createTempSource(content: string, ext: string): string {
     throw new DocumentTooLargeError(body.byteLength);
   }
 
-  const tempFile = path.join(os.tmpdir(), `${TEMP_SOURCE_PREFIX}${randomUUID()}${ext}`);
+  const tempFile = path.join(os.tmpdir(), `${TEMP_PREFIX}${randomUUID()}${ext}`);
   fs.writeFileSync(tempFile, body, { encoding: 'utf-8', mode: 0o600, flag: 'wx' });
   return tempFile;
 }
@@ -228,7 +241,17 @@ function runCheck(
       return;
     }
 
-    execFile(
+    // execFile settles its callback on the child's 'close', which waits for the
+    // stdout and stderr pipes to reach end-of-file. A grandchild that inherited
+    // them keeps them open past the child's own exit, and the callback then
+    // never fires: the check's promise never settles, so its semaphore slot is
+    // never released and its scratch file is never unlinked. A Wine run is
+    // exactly this shape, so the pipes are dropped once the child is gone, the
+    // reader has gone quiet, and the hard cap has passed.
+    let stdioDropped = false;
+    let settled = false;
+
+    const child = execFile(
       executable,
       execArgs,
       // killSignal: SIGKILL because Wine ignores SIGTERM reliably.
@@ -247,6 +270,7 @@ function runCheck(
         encoding: 'buffer',
       },
       (error, stdoutBytes, stderrBytes) => {
+        settled = true;
         const stdout = decodeOutput(stdoutBytes, decoder);
         const stderr = decodeOutput(stderrBytes, decoder);
 
@@ -263,16 +287,48 @@ function runCheck(
           }
         }
 
-        const truncated =
+        const hitMaxBuffer =
           error != null &&
           typeof error.code === 'string' &&
           error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
-        const timedOut = !truncated && isTimeoutKill(error);
+        // Output cut short by the pipe being dropped counts as truncation, the
+        // same as output cut short by the buffer: a missing diagnostic is
+        // incomplete, not absent.
+        const truncated = hitMaxBuffer || stdioDropped;
+        const timedOut = !hitMaxBuffer && !stdioDropped && isTimeoutKill(error);
         const exitCode = getExitCode(error);
         const rawOutput = stdout + '\n' + stderr;
         resolve({ stdout, stderr, exitCode, rawOutput, truncated, timedOut });
       },
     );
+
+    child.once('exit', () => {
+      // The pipes already reached end-of-file; nothing is left to wait for.
+      if (settled) return;
+
+      let idle: NodeJS.Timeout | undefined;
+      const cap = setTimeout(drop, STDIO_DRAIN_MAX_MS);
+
+      function drop(): void {
+        clearTimeout(idle);
+        clearTimeout(cap);
+        if (settled || stdioDropped) return;
+        stdioDropped = true;
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+      }
+
+      const armIdle = (): void => {
+        clearTimeout(idle);
+        idle = setTimeout(drop, STDIO_DRAIN_IDLE_MS);
+        idle.unref();
+      };
+
+      child.stdout?.on('data', armIdle);
+      child.stderr?.on('data', armIdle);
+      armIdle();
+      cap.unref();
+    });
   });
 }
 
@@ -288,7 +344,7 @@ export function sweepStaleTempFiles(now: number = Date.now()): string[] {
   const removed: string[] = [];
 
   for (const entry of fs.readdirSync(os.tmpdir())) {
-    if (!entry.startsWith(TEMP_SOURCE_PREFIX)) continue;
+    if (!entry.startsWith(TEMP_PREFIX)) continue;
     if (!TEMP_SOURCE_EXTENSIONS.some((ext) => entry.endsWith(ext))) continue;
 
     const file = path.join(os.tmpdir(), entry);
@@ -326,7 +382,7 @@ export function stripByteOrderMark(content: string): string {
  * The caller owns the file and must pass the path to {@link removeTempSourceFile}.
  */
 export function createTempSourceFile(content: string, ext: string): string {
-  const tempFile = path.join(os.tmpdir(), `msvc6_lsp_${randomUUID()}${ext}`);
+  const tempFile = path.join(os.tmpdir(), `${TEMP_PREFIX}${randomUUID()}${ext}`);
   fs.writeFileSync(tempFile, stripByteOrderMark(content), { encoding: 'utf-8', mode: 0o600 });
   return tempFile;
 }
