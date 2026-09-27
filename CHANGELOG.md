@@ -12,6 +12,14 @@ package version, not a published artifact.
 
 ### Fixed
 
+- The startup sweep no longer removes a scratch source a live check is still reading.
+  `checkTimeoutMs` is configurable, so a check can outlive the one-hour age the sweep
+  hardcoded, and a second server process starting up would unlink the file a check in the
+  first one was compiling. The age is now `staleTempMinAgeMs(config.checkTimeoutMs)`, the
+  longer of an hour and the configured timeout plus slack.
+- The setup script's STL alias pass reads the truncated header from the MSVC tree instead
+  of from the overlay it just wrote. Reading its own output made a rerun rebuild aliases
+  from a previous run's leftovers, which no change to the source tree could reclaim.
 - Scratch-source staging lives in one module again. `tempfile.ts` owns the `TempFileStore`
   boundary and the sweep, while `compiler.ts` carried a second write path with its own copy of
   the name prefix and no exclusive-create or size check, plus two helpers no caller used. One

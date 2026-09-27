@@ -142,9 +142,13 @@ declare -A STL_MAP=(
 
 for truncated in $(printf '%s\n' "${!STL_MAP[@]}" | sort); do
     full="${STL_MAP[$truncated]}"
-    if [ -f "$DEST/include/$truncated" ]; then
+    # Read the source from the MSVC tree, not from $DEST: the overlay is this
+    # script's own output, so aliasing from it would make a rerun regenerate
+    # headers from a previous run's leftovers, which no removal from the
+    # source tree can ever reclaim.
+    if [ -f "$MSVC_ROOT/INCLUDE/$truncated" ]; then
         full_upper=$(printf '%s' "$full" | tr '[:lower:]' '[:upper:]')
-        copy_as "$DEST/include/$truncated" "$DEST/include" "$full" "$full_upper"
+        copy_as "$MSVC_ROOT/INCLUDE/$truncated" "$DEST/include" "$full" "$full_upper"
         echo "  $truncated -> $full"
     fi
 done

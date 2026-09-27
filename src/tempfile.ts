@@ -17,11 +17,16 @@ const SIMULATED_NAME_DIGITS = 6;
 const SOURCE_EXTENSIONS: readonly string[] = ['.c', '.cpp'];
 
 /**
- * Age at which a scratch file is treated as orphaned by a crashed run. Well
- * above the 30s check timeout, so a file in flight inside another server
- * process is never removed.
+ * Age at which a scratch file is treated as orphaned by a crashed run. Above
+ * the default `checkTimeoutMs`, the longest a check takes out of the box, so a
+ * file in flight inside another server process is never removed. A caller
+ * running with a longer `checkTimeoutMs` must raise the age with it; see
+ * {@link staleTempMinAgeMs}.
  */
 const STALE_TEMP_MIN_AGE_MS = 60 * 60 * 1000;
+
+/** Slack added to the check timeout when deriving the sweep's stale age. */
+const STALE_TEMP_AGE_MARGIN_MS = 60 * 1000;
 
 /** Upper bound on the source text handed to a syntax check. */
 export const MAX_SOURCE_BYTES = 8 * 1024 * 1024;
@@ -195,15 +200,43 @@ export function createTempSource(content: string, ext: string): string {
   return createSystemTempFileStore().write(content, ext);
 }
 
+/** Bounds for one {@link sweepStaleTempFiles} pass. */
+export interface SweepOptions {
+  /** Clock the ages are measured against. Defaults to `Date.now`. */
+  now?: number;
+  /**
+   * Age past which a scratch file is orphaned. Defaults to
+   * {@link STALE_TEMP_MIN_AGE_MS}; pass {@link staleTempMinAgeMs} of the
+   * configured `checkTimeoutMs` so a file in flight is never removed.
+   */
+  minAgeMs?: number;
+}
+
+/**
+ * The age a scratch source must reach before it is certainly not being read by
+ * a live check: the configured check timeout, plus slack for staging and
+ * cleanup. The sweep is a global delete over a shared directory, so its age
+ * has to cover the slowest check in *any* running server, not just this one's
+ * default.
+ */
+export function staleTempMinAgeMs(checkTimeoutMs: number): number {
+  return Math.max(STALE_TEMP_MIN_AGE_MS, checkTimeoutMs + STALE_TEMP_AGE_MARGIN_MS);
+}
+
 /**
  * Deletes scratch sources left behind by a run that was killed before its
  * cleanup, and returns the paths removed. A server that is restarted after a
  * crash otherwise accumulates one orphaned file per interrupted check, and no
- * later run ever reclaims them. Removing only files older than
- * {@link STALE_TEMP_MIN_AGE_MS} keeps this safe alongside a concurrently
- * running server; running it twice in a row removes nothing the second time.
+ * later run ever reclaims them. Removing only files older than `minAgeMs`
+ * keeps this safe alongside a concurrently running server: the age bounds how
+ * long a file a live check is still reading can survive, and a sweep never
+ * removes a file it cannot prove is abandoned. Running it twice in a row
+ * removes nothing the second time, because the first pass already unlinked
+ * what it found.
  */
-export function sweepStaleTempFiles(now: number = Date.now()): string[] {
+export function sweepStaleTempFiles(opts: SweepOptions = {}): string[] {
+  const now = opts.now ?? Date.now();
+  const minAgeMs = opts.minAgeMs ?? STALE_TEMP_MIN_AGE_MS;
   const removed: string[] = [];
 
   for (const entry of fs.readdirSync(os.tmpdir())) {
@@ -218,7 +251,7 @@ export function sweepStaleTempFiles(now: number = Date.now()): string[] {
       continue; // Vanished between listing and stat.
     }
     if (!stats.isFile()) continue;
-    if (now - stats.mtimeMs < STALE_TEMP_MIN_AGE_MS) continue;
+    if (now - stats.mtimeMs < minAgeMs) continue;
 
     try {
       fs.unlinkSync(file);

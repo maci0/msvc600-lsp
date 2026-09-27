@@ -10,6 +10,7 @@ import {
   createSimulatedTempFileStore,
   createTempSource,
   sweepStaleTempFiles,
+  staleTempMinAgeMs,
   DocumentTooLargeError,
   MAX_SOURCE_BYTES,
 } from '../src/tempfile';
@@ -201,6 +202,48 @@ describe('sweepStaleTempFiles', () => {
       expect(sweepStaleTempFiles()).not.toContain(file);
     } finally {
       fs.rmSync(file, { force: true });
+    }
+  });
+});
+
+describe('staleTempMinAgeMs', () => {
+  it('clears the longest check the default timeout allows', () => {
+    expect(staleTempMinAgeMs(30_000)).toBeGreaterThan(30_000);
+  });
+
+  it('grows past a timeout longer than the default age', () => {
+    expect(staleTempMinAgeMs(4 * 60 * 60 * 1000)).toBeGreaterThan(4 * 60 * 60 * 1000);
+  });
+});
+
+describe('sweepStaleTempFiles with a raised age', () => {
+  const HOUR_MS = 60 * 60 * 1000;
+  const LONG_CHECK_MS = 4 * 60 * 60 * 1000;
+
+  function makeTemp(name: string, ageMs: number): string {
+    const file = path.join(os.tmpdir(), name);
+    fs.writeFileSync(file, 'x');
+    const when = new Date(Date.now() - ageMs);
+    fs.utimesSync(file, when, when);
+    return file;
+  }
+
+  it('keeps a file a slow check is still reading', () => {
+    const file = makeTemp(`msvc6_lsp_slow_${process.pid}.c`, 2 * HOUR_MS);
+    try {
+      expect(sweepStaleTempFiles()).toContain(file);
+    } finally {
+      fs.rmSync(file, { force: true });
+    }
+
+    const again = makeTemp(`msvc6_lsp_slow_${process.pid}.c`, 2 * HOUR_MS);
+    try {
+      expect(
+        sweepStaleTempFiles({ minAgeMs: staleTempMinAgeMs(LONG_CHECK_MS) }),
+      ).not.toContain(again);
+      expect(fs.existsSync(again)).toBe(true);
+    } finally {
+      fs.rmSync(again, { force: true });
     }
   });
 });

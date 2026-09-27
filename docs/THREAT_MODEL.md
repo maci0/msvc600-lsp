@@ -136,8 +136,13 @@ dependency surface is the four `vscode-languageserver*` packages and
   is a random UUID and the mode is `0o600`, which leaves only the shared
   directory listing and crash leftovers. A process killed between write and
   unlink leaves the content behind; the startup sweep
-  (`sweepStaleTempFiles`, `src/tempfile.ts:206-232`) removes it once it is
-  older than an hour (`src/tempfile.ts:24`). The sweep matches on a fixed
+  (`sweepStaleTempFiles`, `src/tempfile.ts:237-262`) removes it once it is
+  older than an hour or older than the configured check timeout, whichever is
+  longer (`staleTempMinAgeMs`, `src/tempfile.ts:222-224`; default constant at
+  `src/tempfile.ts:26`). The age has to cover the timeout because the sweep
+  deletes from a directory shared with every other running server, and a
+  source still being read by a live check would otherwise be unlinked
+  underneath it. The sweep matches on a fixed
   prefix (`src/tempfile.ts:8`), so it only ever deletes its own scratch
   files, but it does mean any local process can plant a decoy name to have it
   deleted.

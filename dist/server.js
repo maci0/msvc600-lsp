@@ -393,9 +393,11 @@ function tooLargeDiagnostic(error) {
 documents.listen(connection);
 connection.listen();
 // Reclaim scratch sources from a previous run that was killed before its
-// cleanup; without this every crash leaves one orphan behind forever.
+// cleanup; without this every crash leaves one orphan behind forever. The age
+// covers the configured check timeout, so a sweep in a second server process
+// never unlinks a source a check in the first one is still reading.
 try {
-    (0, tempfile_1.sweepStaleTempFiles)();
+    (0, tempfile_1.sweepStaleTempFiles)({ minAgeMs: (0, tempfile_1.staleTempMinAgeMs)(config.checkTimeoutMs) });
 }
 catch (e) {
     logValidationError('Stale temp sweep failed', e);
