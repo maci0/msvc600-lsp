@@ -16,6 +16,7 @@
     "test:unit": "vitest run tests/config.test.ts tests/diagnostics.test.ts tests/wine-path.test.ts tests/compiler.test.ts",
     "lint": "shellcheck scripts/*.sh",
     "check": "bun run lint && bun run typecheck && bun run test",
+    "ci": "bun install --frozen-lockfile && bun run check",
     "doctor": "bash scripts/doctor.sh",
     "start": "bun dist/server.js --stdio",
     "setup": "bash scripts/setup-includes.sh"
@@ -33,6 +34,7 @@
     "vitest": "^1.6.0"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=18",
+    "bun": "1.4.0"
   }
 }

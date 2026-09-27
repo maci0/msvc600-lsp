@@ -8,10 +8,10 @@ bun run doctor    # prints every missing prerequisite; exit 0 means the suite ca
 bun run build
 ```
 
-`bun run doctor` checks the things that otherwise fail one at a time: bun, `node_modules`,
-ShellCheck, `VC/VC98/BIN/CL.EXE`, Wine, and the case-insensitive include overlay that `bun run setup`
-creates. See "Prerequisites" in the README for where MSVC 6.0 comes from; the tree is not
-in git.
+`bun run doctor` checks the things that otherwise fail one at a time: the `packageManager` bun
+version, `node_modules`, ShellCheck, `VC/VC98/BIN/CL.EXE`, Wine, and the case-insensitive include
+overlay that `bun run setup` creates. See "Prerequisites" in the README for where MSVC 6.0 comes
+from; the tree is not in git.
 
 ## Before you push
 
@@ -20,8 +20,11 @@ bun run check
 ```
 
 `check` is the whole local gate, in order: `shellcheck scripts/*.sh`, then `tsc --noEmit` over
-`src/` plus `tsc -p tsconfig.test.json` over `src/` and `tests/`, then the full test suite. The
-repository has no CI pipeline yet, so this is the only gate; run it before every push.
+`src/` plus `tsc -p tsconfig.test.json` over `src/` and `tests/`, then the full test suite. GitHub
+Actions runs the same gate in `.github/workflows/ci.yml`, preceded by
+`bun install --frozen-lockfile` so a lockfile that no longer resolves fails the build instead of
+being rewritten. `bun run ci` is that sequence locally. The MSVC6 integration tests skip
+themselves in CI, where `VC/VC98` is not present.
 
 `tsconfig.json` is the build config and emits `dist/` from `src/` alone. `tsconfig.test.json`
 extends it with `noEmit` to type-check the test tree, which the build config excludes. Both are

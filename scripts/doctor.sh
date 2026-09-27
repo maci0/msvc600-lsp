@@ -17,7 +17,14 @@ fail() {
 }
 
 if ! command -v bun >/dev/null 2>&1; then
-    fail "bun" "install bun (https://bun.sh); package.json pins bun@1.4.0 via packageManager"
+    fail "bun" "install the version package.json pins via packageManager (https://bun.sh)"
+else
+    pinned_bun=$(BUN_MANIFEST="$PROJECT_ROOT/package.json" bun -e 'const { packageManager } = require(process.env.BUN_MANIFEST); console.log(packageManager.replace(/^bun@/, ""))' 2>/dev/null)
+    if [ -z "$pinned_bun" ]; then
+        fail "packageManager pin in package.json" "the field is missing or unreadable; the bun version the lockfile was written by is unknown"
+    elif [ "$pinned_bun" != "$(bun --version)" ]; then
+        fail "bun $pinned_bun" "package.json pins bun@$pinned_bun via packageManager, found $(bun --version); the lockfile is written by that version"
+    fi
 fi
 
 if [ ! -d "$PROJECT_ROOT/node_modules" ]; then
@@ -45,7 +52,7 @@ esac
 
 if [ "$failures" -gt 0 ]; then
     echo
-    echo "$failures prerequisite(s) missing. Tests that need the compiler will be skipped until these are in place."
+    echo "$failures prerequisite problem(s). Tests that need the compiler will be skipped until these are in place."
     exit 1
 fi
 

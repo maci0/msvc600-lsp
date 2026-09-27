@@ -1,0 +1,25 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          # must equal the packageManager pin in package.json
+          bun-version: "1.4.0"
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+      - name: Install ShellCheck
+        run: sudo apt-get update && sudo apt-get install --yes shellcheck
+      - name: Lint, typecheck, test
+        # The MSVC6 integration tests skip themselves when VC/VC98 is absent.
+        run: bun run check

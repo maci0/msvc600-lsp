@@ -3,6 +3,7 @@
 # Linux filesystems are case-sensitive, but MSVC headers use mixed-case #includes.
 # This script creates a mirror with both upper and lowercase copies.
 set -euo pipefail
+shopt -s nullglob
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
@@ -14,45 +15,62 @@ if [ ! -d "$MSVC_ROOT" ]; then
     exit 1
 fi
 
+for required in INCLUDE LIB BIN; do
+    if [ ! -d "$MSVC_ROOT/$required" ]; then
+        echo "ERROR: $MSVC_ROOT/$required is missing; the overlay would be incomplete"
+        exit 1
+    fi
+done
+
 echo "Setting up case-insensitive MSVC6 overlay at $DEST ..."
 
 mkdir -p "$DEST/include" "$DEST/lib" "$DEST/bin"
 
-lowercase() { echo "$1" | tr '[:upper:]' '[:lower:]'; }
+failures=0
 
-uppercase() { echo "$1" | tr '[:lower:]' '[:upper:]'; }
-
-# Copies every file in $1 into $2 under its own name and its lowercase name.
-copy_with_case_variants() {
-    local src="$1" dest="$2" f base lower
-    for f in "$src/"*; do
-        [ -d "$f" ] && continue
-        base=$(basename "$f")
-        lower=$(lowercase "$base")
-        cp -f "$f" "$dest/$base" 2>/dev/null || true
-        if [ "$base" != "$lower" ]; then
-            cp -f "$f" "$dest/$lower" 2>/dev/null || true
+# Copy $1 into $2 under each of the names in $3 onward, counting any that fail
+# so a partial overlay is reported instead of silently produced.
+copy_as() {
+    local src=$1 dest_dir=$2
+    shift 2
+    local name
+    for name in "$@"; do
+        if ! cp -f -- "$src" "$dest_dir/$name"; then
+            echo "ERROR: cannot copy $src to $dest_dir/$name" >&2
+            failures=$((failures + 1))
         fi
     done
 }
 
+# Copy $1 into $2 under its own name plus its lower- and upper-case spellings.
+# Every name is written even when it duplicates the source, so the overlay
+# mirrors the case-insensitive layout CL.EXE expects.
+copy_variants() {
+    local src=$1 dest_dir=$2
+    local base lower upper
+    base=$(basename "$src")
+    lower=$(printf '%s' "$base" | tr '[:upper:]' '[:lower:]')
+    upper=$(printf '%s' "$base" | tr '[:lower:]' '[:upper:]')
+    copy_as "$src" "$dest_dir" "$base" "$lower" "$upper"
+}
+
+# Copy all include files, skipping subdirs, which are handled below.
 echo "Copying INCLUDE files..."
-copy_with_case_variants "$MSVC_ROOT/INCLUDE" "$DEST/include"
+for f in "$MSVC_ROOT/INCLUDE/"*; do
+    [ -d "$f" ] && continue
+    copy_variants "$f" "$DEST/include"
+done
 
 # Handle subdirectories (GL/, SYS/, OBJMODEL/)
 for dir in "$MSVC_ROOT/INCLUDE/GL" "$MSVC_ROOT/INCLUDE/SYS" "$MSVC_ROOT/INCLUDE/OBJMODEL"; do
     if [ -d "$dir" ]; then
         base=$(basename "$dir")
-        lower=$(lowercase "$base")
+        lower=$(printf '%s' "$base" | tr '[:upper:]' '[:lower:]')
         mkdir -p "$DEST/include/$base" "$DEST/include/$lower"
         for f in "$dir/"*; do
             [ -d "$f" ] && continue
-            fname=$(basename "$f")
-            flower=$(lowercase "$fname")
-            cp -f "$f" "$DEST/include/$base/$fname" 2>/dev/null || true
-            cp -f "$f" "$DEST/include/$base/$flower" 2>/dev/null || true
-            cp -f "$f" "$DEST/include/$lower/$fname" 2>/dev/null || true
-            cp -f "$f" "$DEST/include/$lower/$flower" 2>/dev/null || true
+            copy_variants "$f" "$DEST/include/$base"
+            copy_variants "$f" "$DEST/include/$lower"
         done
     fi
 done
@@ -68,20 +86,31 @@ declare -A STL_MAP=(
     ["XCEPTION"]="exception"
 )
 
-for truncated in "${!STL_MAP[@]}"; do
+for truncated in $(printf '%s\n' "${!STL_MAP[@]}" | sort); do
     full="${STL_MAP[$truncated]}"
     if [ -f "$DEST/include/$truncated" ]; then
-        cp -f "$DEST/include/$truncated" "$DEST/include/$full"
-        cp -f "$DEST/include/$truncated" "$DEST/include/$(uppercase "$full")"
+        full_upper=$(printf '%s' "$full" | tr '[:lower:]' '[:upper:]')
+        copy_as "$DEST/include/$truncated" "$DEST/include" "$full" "$full_upper"
         echo "  $truncated -> $full"
     fi
 done
 
 echo "Copying LIB files..."
-copy_with_case_variants "$MSVC_ROOT/LIB" "$DEST/lib"
+for f in "$MSVC_ROOT/LIB/"*; do
+    [ -d "$f" ] && continue
+    copy_variants "$f" "$DEST/lib"
+done
 
 echo "Copying BIN files..."
-copy_with_case_variants "$MSVC_ROOT/BIN" "$DEST/bin"
+for f in "$MSVC_ROOT/BIN/"*; do
+    [ -d "$f" ] && continue
+    copy_variants "$f" "$DEST/bin"
+done
+
+if [ "$failures" -gt 0 ]; then
+    echo "ERROR: $failures file(s) could not be copied; the overlay at $DEST is incomplete" >&2
+    exit 1
+fi
 
 echo "Done. MSVC6 overlay created at $DEST"
 printf '  Include: %s\n' 'C:\msvc6\include'

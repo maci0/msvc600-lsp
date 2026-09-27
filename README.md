@@ -15,7 +15,9 @@ Debouncing (300 ms) and abort-on-stale ensure only the latest edit triggers a ch
 
 ## Prerequisites
 
-- **Bun** — runs every script in `package.json`, including `build`, `test`, and `start`
+- **Bun 1.4.0** — runs every script in `package.json`, including `build`, `test`, and `start`. The
+  version is pinned by `packageManager` in `package.json`, which is what wrote `bun.lock`; `bun run
+  doctor` reports a mismatch.
 - **Node.js ≥ 18**
 - **ShellCheck** — lints `scripts/*.sh` as part of `bun run check`
 - **Wine** (Linux/macOS) or native Windows
@@ -29,6 +31,9 @@ The test suite is an integration suite: it spawns the real `CL.EXE` through Wine
 bun install
 bun run build
 ```
+
+CI installs with `bun install --frozen-lockfile`, so a stale `bun.lock` fails the build rather than
+resolving to something new. Use the same flag when you want to know your tree matches the lockfile.
 
 ## Usage
 
@@ -122,13 +127,15 @@ Other fields (especially `additionalFlags`) cannot be changed at runtime, so a r
 
 ```
 src/
-├── config.ts       # Configuration types and validation
-├── wine-path.ts    # POSIX ↔ Wine path conversion
-├── compiler.ts     # CL.EXE invocation (syntax-check mode)
-├── diagnostics.ts  # MSVC output parser → LSP Diagnostic conversion
-├── scheduler.ts    # Debounce timer boundary (real timer, or a stepped one in simulation)
-├── tempfile.ts     # Temp-file boundary: real filesystem, or an in-memory simulated store
-└── server.ts       # LSP server lifecycle, debouncing, abort handling
+├── compiler.ts         # CL.EXE invocation (syntax-check mode)
+├── config.ts           # Configuration types and validation
+├── diagnostics.ts      # MSVC output parser → LSP Diagnostic conversion
+├── scheduler.ts        # Debounce timer boundary (real timer, or a stepped one in simulation)
+├── server.ts           # LSP server lifecycle, debouncing, abort handling
+├── task-queue.ts       # One in-flight validation per document
+├── tempfile.ts         # Temp-file boundary: real filesystem, or an in-memory simulated store
+├── validation-state.ts # Generation counter that discards stale results
+└── wine-path.ts        # POSIX ↔ Wine path conversion
 ```
 
 **Key design decisions:**
@@ -170,7 +177,8 @@ bun run test          # Run test suite
 bun run test:unit     # Tests that run without Wine or an MSVC 6.0 install
 bun run test:watch    # Watch mode
 bun run watch         # Watch + compile
-bun run check         # The pre-push gate: typecheck, then the full test suite
+bun run check         # The pre-push gate: shellcheck, typecheck, then the full test suite
+bun run ci            # What CI runs: frozen-lockfile install, then check
 ```
 
 `bun run check` is what `CONTRIBUTING.md` asks you to run before every push. For running a

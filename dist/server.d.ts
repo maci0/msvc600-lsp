@@ -1,3 +1,4 @@
+#!/usr/bin/env bun
 import { TextDocuments } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { Msvc6Config } from './config';
