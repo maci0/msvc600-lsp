@@ -3,19 +3,16 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { syntaxCheckContent } from '../src/compiler';
-import { Msvc6Config } from '../src/config';
+import { Msvc6Config, defaultConfig } from '../src/config';
 import { CL_EXE, MSVC_ROOT } from './helpers/toolchain';
 import { createSystemTempFileStore, createSimulatedTempFileStore } from '../src/tempfile';
 
 function testConfig(): Msvc6Config {
   return {
+    ...defaultConfig(),
     msvcBasePath: MSVC_ROOT,
     clPath: CL_EXE,
     includePaths: ['C:\\msvc6\\include'],
-    warnLevel: 4,
-    additionalFlags: [],
-    wineExecutable: 'wine',
-    outputEncoding: 'utf8',
     useWine: true,
   };
 }
@@ -27,9 +24,17 @@ describe('createSimulatedTempFileStore', () => {
       const first = store.write('int a;\n', '.c');
       const second = store.write('int b;\n', '.cpp');
       store.remove(first);
-      return store.events;
+      return { events: store.events, second };
     };
-    expect(run()).toEqual(run());
+
+    const firstRun = run();
+    expect(firstRun.events).toEqual(run().events);
+    expect(firstRun.events.map((e) => `${e.op} ${path.basename(e.file)}`)).toEqual([
+      'write msvc6_lsp_000001.c',
+      'write msvc6_lsp_000002.cpp',
+      'remove msvc6_lsp_000001.c',
+    ]);
+    expect(path.basename(firstRun.second)).toBe('msvc6_lsp_000002.cpp');
   });
 
   it('hands each write a distinct path carrying the requested extension', () => {

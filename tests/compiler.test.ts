@@ -13,20 +13,17 @@ import {
   MAX_SOURCE_BYTES,
   MAX_CONCURRENT_CHECKS,
 } from '../src/compiler';
-import { Msvc6Config } from '../src/config';
+import { Msvc6Config, defaultConfig } from '../src/config';
 import { CL_EXE, MSVC_ROOT, describeWithToolchain } from './helpers/toolchain';
 
 const FIXTURES = path.resolve(__dirname, 'fixtures');
 
 function testConfig(): Msvc6Config {
   return {
+    ...defaultConfig(),
     msvcBasePath: MSVC_ROOT,
     clPath: CL_EXE,
     includePaths: ['C:\\msvc6\\include'],
-    warnLevel: 4,
-    additionalFlags: [],
-    wineExecutable: 'wine',
-    outputEncoding: 'utf8',
     useWine: true,
   };
 }
@@ -222,6 +219,64 @@ describe('syntaxCheck failure signalling', () => {
       await expect(syntaxCheck(cfg, path.join(FIXTURES, 'valid.c'))).rejects.toThrow(
         /not-a-real-encoding/,
       );
+    },
+  );
+});
+
+describe('syntaxCheck resource limits', () => {
+  const floodConfig = (): Msvc6Config => ({
+    ...testConfig(),
+    useWine: false,
+    clPath: path.join(FIXTURES, 'emit_flood.mjs'),
+  });
+
+  it.runIf(process.platform !== 'win32')(
+    'truncates once the child writes past maxOutputBytes',
+    async () => {
+      process.env.MSVC6_TEST_FLOOD_BYTES = '65536';
+      try {
+        const result = await syntaxCheck({ ...floodConfig(), maxOutputBytes: 4096 }, path.join(FIXTURES, 'valid.c'));
+        expect(result.truncated).toBe(true);
+        expect(Buffer.byteLength(result.stdout)).toBeLessThanOrEqual(4096);
+      } finally {
+        delete process.env.MSVC6_TEST_FLOOD_BYTES;
+      }
+    },
+  );
+
+  it.runIf(process.platform !== 'win32')(
+    'keeps the whole output when it fits inside maxOutputBytes',
+    async () => {
+      process.env.MSVC6_TEST_FLOOD_BYTES = '4096';
+      try {
+        const result = await syntaxCheck({ ...floodConfig(), maxOutputBytes: 1 << 20 }, path.join(FIXTURES, 'valid.c'));
+        expect(result.truncated).toBe(false);
+        expect(Buffer.byteLength(result.stdout)).toBeGreaterThan(4096);
+      } finally {
+        delete process.env.MSVC6_TEST_FLOOD_BYTES;
+      }
+    },
+  );
+
+  it.runIf(process.platform !== 'win32')(
+    'kills a child that outlives checkTimeoutMs',
+    async () => {
+      const cfg = { ...testConfig(), useWine: false, clPath: path.join(FIXTURES, 'slow_compiler.mjs') };
+      const result = await syntaxCheck({ ...cfg, checkTimeoutMs: 1 }, path.join(FIXTURES, 'valid.c'));
+      // Left to finish, the fixture writes nothing and exits 0. A kill
+      // resolves with a non-zero exit code rather than a rejection, so the
+      // server can still publish what little the child produced.
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stdout).toBe('');
+    },
+  );
+
+  it.runIf(process.platform !== 'win32')(
+    'lets a child that finishes in time keep its exit code',
+    async () => {
+      const cfg = { ...testConfig(), useWine: false, clPath: path.join(FIXTURES, 'slow_compiler.mjs') };
+      const result = await syntaxCheck({ ...cfg, checkTimeoutMs: 30_000 }, path.join(FIXTURES, 'valid.c'));
+      expect(result.exitCode).toBe(0);
     },
   );
 });

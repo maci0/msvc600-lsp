@@ -58,12 +58,12 @@ describe('ValidationSequencer', () => {
     expect(reopened.isCurrent()).toBe(true);
   });
 
-  it('issues a fresh generation for a repeated validation', () => {
+  it('issues a strictly higher generation for a repeated validation', () => {
     const seq = new ValidationSequencer();
     const first = seq.begin(URI_A);
     const second = seq.begin(URI_A);
 
-    expect(first.generation).not.toBe(second.generation);
+    expect(second.generation).toBeGreaterThan(first.generation);
   });
 
   it('keeps generations unique across URIs and restarts', () => {

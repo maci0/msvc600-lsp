@@ -246,8 +246,8 @@ function runCheck(
       // below with the configured output encoding, not assumed to be UTF-8.
       {
         env,
-        timeout: opts.timeoutMs ?? COMPILE_TIMEOUT_MS,
-        maxBuffer: MAX_OUTPUT_BYTES,
+        timeout: opts.timeoutMs ?? config.checkTimeoutMs,
+        maxBuffer: config.maxOutputBytes,
         signal: opts.signal,
         killSignal: 'SIGKILL',
         encoding: 'buffer',
