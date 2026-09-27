@@ -47,7 +47,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 CL_EXE="$PROJECT_ROOT/VC/VC98/BIN/CL.EXE"
 MSVC_ROOT="$PROJECT_ROOT/VC/VC98"
-OVERLAY_DIR="${HOME:-}/.wine/drive_c/msvc6"
+# Wine reads WINEPREFIX and falls back to $HOME/.wine, so the overlay has to be
+# looked for where Wine will read it, not where a default install would put it.
+WINE_PREFIX="${WINEPREFIX:-${HOME:+${HOME}/.wine}}"
+OVERLAY_DIR="$WINE_PREFIX/drive_c/msvc6"
 
 failures=0
 
@@ -89,6 +92,8 @@ MINGW* | CYGWIN*) ;;
 Linux)
     if ! command -v wine >/dev/null 2>&1; then
         fail "wine" "install Wine, or set useWine=false and use a native Windows CL.EXE"
+    elif [ -z "$WINE_PREFIX" ]; then
+        fail "Wine prefix location" "neither WINEPREFIX nor HOME is set, so the overlay cannot be located"
     elif [ ! -d "$OVERLAY_DIR/include" ]; then
         fail "case-insensitive include overlay at $OVERLAY_DIR" "run 'bun run setup'"
     fi

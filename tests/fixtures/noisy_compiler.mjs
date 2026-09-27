@@ -10,6 +10,7 @@
 // the output the test is about.
 import { writeSync } from 'fs';
 
+const STDOUT = 1;
 const LINE = Buffer.from('Z:\\tmp\\noisy.c(1) : error C2065: undeclared identifier\n');
 const LINES = 2048;
 
@@ -17,7 +18,7 @@ for (let i = 0; i < LINES; i++) {
   let offset = 0;
   while (offset < LINE.length) {
     try {
-      offset += writeSync(1, LINE, offset);
+      offset += writeSync(STDOUT, LINE, offset);
     } catch (error) {
       // The parent stopped reading (it hit its cap and killed us): the output
       // has served its purpose, so end quietly instead of failing the check.

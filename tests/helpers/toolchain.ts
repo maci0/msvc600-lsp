@@ -1,4 +1,3 @@
-import { execFileSync } from 'child_process';
 import { describe } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -15,15 +14,19 @@ const BLOCKER_HINT: Record<ToolchainBlocker, string> = {
   'wine-missing': 'wine not found on PATH; install Wine or run natively on Windows',
 };
 
+/**
+ * Whether `command` is on `PATH`, resolved the way the platform resolves it:
+ * `PATHEXT` supplies the suffixes a Windows lookup tries, everything else gets
+ * the bare name. Scans the directory list directly rather than shelling out to
+ * `sh -c`, which does not exist on a Windows host.
+ */
 function which(command: string): boolean {
-  try {
-    execFileSync('sh', ['-c', `command -v ${command}`], {
-      stdio: ['ignore', 'ignore', 'ignore'],
-    });
-    return true;
-  } catch {
-    return false;
-  }
+  const dirs = (process.env.PATH ?? '').split(path.delimiter).filter(Boolean);
+  const suffixes =
+    process.platform === 'win32' ? (process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';') : [''];
+  return dirs.some((dir) =>
+    suffixes.some((suffix) => fs.existsSync(path.join(dir, command + suffix))),
+  );
 }
 
 /** Blocker for spawning the real compiler, or null when CL.EXE can run. */

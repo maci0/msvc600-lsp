@@ -23,6 +23,17 @@ describe('toWinePath', () => {
     expect(result).toMatch(/^Z:\\/);
     expect(result).toContain('relative\\path.c');
   });
+
+  it('leaves a Windows path untouched', () => {
+    expect(toWinePath('C:\\msvc6\\include')).toBe('C:\\msvc6\\include');
+    expect(toWinePath('C:/msvc6/include')).toBe('C:/msvc6/include');
+  });
+
+  it('maps a POSIX absolute path to Z: without asking path.resolve', () => {
+    // `path.resolve` on a Windows host would answer `C:\tmp\test.c` for this
+    // input, which never reaches the Unix root Wine mounts on Z:.
+    expect(toWinePath('/tmp/test.c')).toBe('Z:\\tmp\\test.c');
+  });
 });
 
 describe('fromWinePath', () => {

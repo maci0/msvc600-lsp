@@ -13,14 +13,16 @@ Mirrors VC/VC98 into a Wine prefix directory, writing every file under its own
 name and its lowercase name, because MSVC headers use mixed-case #include lines
 that do not resolve on a case-sensitive filesystem.
 
-  --dest DIR   target directory (default: $HOME/.wine/drive_c/msvc6)
+  --dest DIR   target directory (default: $WINEPREFIX/drive_c/msvc6, else
+               $HOME/.wine/drive_c/msvc6)
   -h, --help   print this help and exit
 
-Exits 0 on success, 1 when the MSVC 6.0 tree is missing, 2 on a bad argument.
+Exits 0 on success, 1 when the MSVC 6.0 tree is missing, 2 on a bad argument or
+when neither WINEPREFIX nor HOME is set.
 EOF
 }
 
-DEST="$HOME/.wine/drive_c/msvc6"
+DEST=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -48,6 +50,15 @@ while [ $# -gt 0 ]; do
         ;;
     esac
 done
+
+if [ -z "$DEST" ]; then
+    WINE_PREFIX="${WINEPREFIX:-${HOME:-}}"
+    if [ -z "$WINE_PREFIX" ]; then
+        echo "ERROR: HOME is unset, so the Wine prefix cannot be located; pass --dest DIR or set WINEPREFIX" >&2
+        exit 2
+    fi
+    DEST="$WINE_PREFIX/drive_c/msvc6"
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
