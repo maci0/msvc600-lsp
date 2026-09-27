@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { syntaxCheckContent } from '../src/compiler';
-import { Msvc6Config, defaultConfig } from '../src/config';
+import { Msvc6Config, defaultConfig, DEFAULT_CHECK_TIMEOUT_MS, DEFAULT_MAX_OUTPUT_BYTES } from '../src/config';
 import { CL_EXE, MSVC_ROOT } from './helpers/toolchain';
 import { createSystemTempFileStore, createSimulatedTempFileStore } from '../src/tempfile';
 
@@ -14,8 +14,8 @@ function testConfig(): Msvc6Config {
     clPath: CL_EXE,
     includePaths: ['C:\\msvc6\\include'],
     useWine: true,
-    checkTimeoutMs: 30_000,
-    maxOutputBytes: 1024 * 1024,
+    checkTimeoutMs: DEFAULT_CHECK_TIMEOUT_MS,
+    maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
   };
 }
 

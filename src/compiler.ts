@@ -8,6 +8,7 @@ import { Msvc6Config, CPP_EXTENSIONS, C_EXTENSIONS } from './config';
 import { encodeSourceText, prepareSourceText } from './encoding';
 import { toWinePath } from './wine-path';
 import { TempFileStore, createSystemTempFileStore } from './tempfile';
+import { Semaphore } from './concurrency';
 
 /** Scratch sources are named with this prefix so a crashed run leaves identifiable leftovers. */
 const TEMP_SOURCE_PREFIX = 'msvc6_lsp_';
@@ -25,8 +26,14 @@ const STALE_TEMP_MIN_AGE_MS = 60 * 60 * 1000;
 /** Upper bound on the source text handed to a syntax check. */
 export const MAX_SOURCE_BYTES = 8 * 1024 * 1024;
 
-/** Concurrent CL.EXE children allowed at once; each one is a Wine process. */
-export const MAX_CONCURRENT_CHECKS = 4;
+/**
+ * Concurrent CL.EXE children allowed at once. Each one is a heavyweight process
+ * (a full Wine services startup on non-Windows), so the number is kept at the
+ * parallelism a developer machine absorbs; the rest queue rather than dropping.
+ * The server schedules through the same number, so the two layers of the
+ * pipeline agree on one limit.
+ */
+export const MAX_CONCURRENT_CHECKS = 2;
 
 /** Options for the entry points that stage document text on disk. */
 export interface TempFileOptions {
@@ -153,25 +160,7 @@ export function createTempSource(content: string, ext: string): string {
   return tempFile;
 }
 
-let activeChecks = 0;
-const checkQueue: Array<() => void> = [];
-
-function acquireCheckSlot(): Promise<void> {
-  if (activeChecks < MAX_CONCURRENT_CHECKS) {
-    activeChecks += 1;
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => checkQueue.push(resolve));
-}
-
-function releaseCheckSlot(): void {
-  const next = checkQueue.shift();
-  if (next) {
-    next();
-    return;
-  }
-  activeChecks -= 1;
-}
+const checkSlots = new Semaphore(MAX_CONCURRENT_CHECKS);
 
 function abortError(): NodeJS.ErrnoException {
   const error: NodeJS.ErrnoException = new Error('CL.EXE check aborted');
@@ -184,7 +173,8 @@ function abortError(): NodeJS.ErrnoException {
  *
  * At most {@link MAX_CONCURRENT_CHECKS} children run at once; the rest queue,
  * so a burst of open documents cannot spawn an unbounded number of Wine
- * processes. A queued check whose signal aborts is dropped before it starts.
+ * processes. A queued check whose signal aborts leaves the queue without ever
+ * taking a slot.
  *
  * Always resolves — compiler errors are reported via `exitCode` and
  * `rawOutput`, not via promise rejection. Rejects only when no check could
@@ -198,13 +188,13 @@ export async function syntaxCheck(
   filePath: string,
   opts: { signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<CompileResult> {
-  if (opts.signal?.aborted) throw abortError();
-  await acquireCheckSlot();
+  const release = await checkSlots.acquire(opts.signal);
+  if (release === null) throw abortError();
   try {
     if (opts.signal?.aborted) throw abortError();
     return await runCheck(config, filePath, opts);
   } finally {
-    releaseCheckSlot();
+    release();
   }
 }
 
@@ -246,6 +236,8 @@ function runCheck(
       // runaway Wine or a chatty CL.EXE per machine.
       // encoding: 'buffer' keeps the raw code-page bytes; they are decoded
       // below with the configured output encoding, not assumed to be UTF-8.
+      // timeout and maxBuffer come from the config, so a client that raises or
+      // lowers checkTimeoutMs and maxOutputBytes gets what it asked for.
       {
         env,
         timeout: opts.timeoutMs ?? config.checkTimeoutMs,

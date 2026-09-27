@@ -2,7 +2,11 @@
   "name": "msvc600-lsp",
   "version": "0.1.0",
   "description": "LSP server for Microsoft Visual C++ 6.0 (MSVC6) running under Wine on Linux",
+  "license": "UNLICENSED",
   "main": "dist/server.js",
+  "files": [
+    "dist"
+  ],
   "packageManager": "bun@1.4.0",
   "bin": {
     "msvc600-lsp": "dist/server.js"

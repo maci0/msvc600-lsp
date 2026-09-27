@@ -32,6 +32,7 @@ import {
   DocumentTooLargeError,
   COMPILE_TIMEOUT_MS,
   MAX_OUTPUT_BYTES,
+  MAX_CONCURRENT_CHECKS,
 } from './compiler';
 import { parseDiagnostics, toLspDiagnostics, toFailureDiagnostic, LSP_UINT_MAX } from './diagnostics';
 import { sanitizeForLog } from './logging';
@@ -67,14 +68,6 @@ function clearPendingValidation(uri: string): void {
   clearTimeout(pending);
   pendingValidations.delete(uri);
 }
-
-/**
- * At most this many CL.EXE children exist at once. Each check is a heavyweight
- * process (a full Wine services startup on non-Windows), so the number is kept
- * at the parallelism a developer machine can actually absorb; the queue
- * serialises the rest rather than dropping them.
- */
-const MAX_CONCURRENT_CHECKS = 2;
 
 /**
  * Validation tasks, one per document URI. A new task for a URI aborts the

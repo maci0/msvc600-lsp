@@ -128,8 +128,10 @@ Other fields (especially `additionalFlags`) cannot be changed at runtime, so a r
 ```
 src/
 ├── compiler.ts         # CL.EXE invocation (syntax-check mode) and scratch sources
+├── concurrency.ts      # Counting semaphore bounding CL.EXE children
 ├── config.ts           # Configuration types and validation
 ├── diagnostics.ts      # MSVC output parser → LSP Diagnostic conversion
+├── encoding.ts         # Source preparation and the 0600 scratch-source write
 ├── logging.ts          # Control-character stripping for the client log
 ├── scheduler.ts        # Debounce timer boundary (real timer, or a stepped one in simulation)
 ├── server.ts           # LSP server lifecycle, debouncing, abort handling
@@ -161,7 +163,7 @@ The open buffer is checked as a standalone translation unit, so a header that re
 
 Diagnostics are line-scoped: each one spans columns 0 to the end of the reported line, because CL.EXE gives no column numbers for these messages. A check is killed after `checkTimeoutMs` (30 s by default), and output past `maxOutputBytes` (1 MiB by default) is truncated, which drops the tail of the diagnostic list.
 
-At most four `CL.EXE` children run at once; the rest queue, so a large revalidation after a settings change cannot spawn a process per open document. Buffers above 8 MiB are not written to the temp directory at all, and the editor shows a single `msvc6-too-large` note in their place.
+At most two `CL.EXE` children run at once; the rest queue, so a large revalidation after a settings change cannot spawn a process per open document. Buffers above 8 MiB are not written to the temp directory at all, and the editor shows a single `msvc6-too-large` note in their place.
 
 A check that never ran, whether CL.EXE cannot be spawned or the scratch source cannot be written, publishes one error diagnostic at the top of the file saying so rather than an empty list, so a broken setup never reads as a clean file.
 
@@ -187,4 +189,5 @@ single file or a single test by name, see "Test layout" in `CONTRIBUTING.md`.
 
 ## License
 
-None declared yet. The repository ships no license file, so no permission to use or redistribute the code has been granted.
+None granted yet. `package.json` declares `"license": "UNLICENSED"` and the repository ships no
+license file, so no permission to use or redistribute the code has been granted.

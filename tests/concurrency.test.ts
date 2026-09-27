@@ -52,6 +52,7 @@ describe('Semaphore', () => {
     const first = await sem.acquire();
     const second = sem.acquire();
     await delay(1);
+    expect(secondAcquired).toBe(false);
 
     let thirdAcquired = false;
     const third = sem.acquire().then((release) => {
@@ -67,6 +68,7 @@ describe('Semaphore', () => {
     expect(secondAcquired).toBe(true);
     expect(thirdAcquired).toBe(false);
     (await second)?.();
+    expect(secondAcquired).toBe(true);
     await delay(1);
     expect(thirdAcquired).toBe(true);
     (await third)?.();

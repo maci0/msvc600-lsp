@@ -13,7 +13,7 @@ import {
   MAX_SOURCE_BYTES,
   MAX_CONCURRENT_CHECKS,
 } from '../src/compiler';
-import { Msvc6Config, defaultConfig } from '../src/config';
+import { Msvc6Config, defaultConfig, DEFAULT_CHECK_TIMEOUT_MS, DEFAULT_MAX_OUTPUT_BYTES } from '../src/config';
 import { CL_EXE, MSVC_ROOT, describeWithToolchain } from './helpers/toolchain';
 
 const FIXTURES = path.resolve(__dirname, 'fixtures');
@@ -25,8 +25,8 @@ function testConfig(): Msvc6Config {
     clPath: CL_EXE,
     includePaths: ['C:\\msvc6\\include'],
     useWine: true,
-    checkTimeoutMs: 30_000,
-    maxOutputBytes: 1024 * 1024,
+    checkTimeoutMs: DEFAULT_CHECK_TIMEOUT_MS,
+    maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
   };
 }
 
@@ -508,6 +508,59 @@ describe('createTempSource', () => {
     expect(() => createTempSource(oversized, '.c')).toThrow(DocumentTooLargeError);
     const after = fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('msvc6_lsp_')).length;
     expect(after).toBe(before);
+  });
+});
+
+describe('syntaxCheck output limits', () => {
+  it('kills a check that outruns checkTimeoutMs', async () => {
+    const runWithTimeout = async (checkTimeoutMs: number): Promise<{ markers: string[]; exitCode: number }> => {
+      const cfg = {
+        ...testConfig(),
+        useWine: false,
+        clPath: path.join(FIXTURES, 'slow_compiler.mjs'),
+        checkTimeoutMs,
+      };
+      const trace = path.join(os.tmpdir(), `msvc6_lsp_trace_${randomUUID()}`);
+      process.env.MSVC6_TEST_TRACE = trace;
+      try {
+        const result = await syntaxCheck(cfg, path.join(FIXTURES, 'valid.c'));
+        const markers = fs.existsSync(trace) ? fs.readFileSync(trace, 'utf-8').trim().split('\n') : [];
+        return { markers, exitCode: result.exitCode };
+      } finally {
+        delete process.env.MSVC6_TEST_TRACE;
+        fs.rmSync(trace, { force: true });
+      }
+    };
+
+    // The fixture marks its own start and end around a 150 ms run. Given the
+    // default timeout it finishes; given 50 ms it is killed, so it never writes
+    // the end marker. A killed child is reported as a non-zero exit code rather
+    // than a rejection.
+    const patient = await runWithTimeout(DEFAULT_CHECK_TIMEOUT_MS);
+    expect(patient.markers.map((m) => m.split(' ')[0])).toEqual(['start', 'end']);
+    expect(patient.exitCode).toBe(0);
+
+    const impatient = await runWithTimeout(50);
+    expect(impatient.markers).not.toContain('end');
+    expect(impatient.exitCode).not.toBe(0);
+  });
+
+  it('caps captured output at maxOutputBytes and flags the loss', async () => {
+    const cfg = {
+      ...testConfig(),
+      useWine: false,
+      clPath: path.join(FIXTURES, 'noisy_compiler.mjs'),
+      maxOutputBytes: 512,
+    };
+    const result = await syntaxCheck(cfg, path.join(FIXTURES, 'valid.c'));
+    expect(result.truncated).toBe(true);
+    expect(Buffer.byteLength(result.stdout)).toBeLessThanOrEqual(512);
+  });
+
+  it('keeps the full output of a quiet check under the cap', async () => {
+    const cfg = { ...testConfig(), useWine: false, clPath: path.join(FIXTURES, 'slow_compiler.mjs') };
+    const result = await syntaxCheck(cfg, path.join(FIXTURES, 'valid.c'));
+    expect(result.truncated).toBe(false);
   });
 });
 
