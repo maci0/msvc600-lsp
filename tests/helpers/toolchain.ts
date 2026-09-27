@@ -21,12 +21,21 @@ const BLOCKER_HINT: Record<ToolchainBlocker, string> = {
  * `sh -c`, which does not exist on a Windows host.
  */
 function which(command: string): boolean {
+  return whichPath(command) !== null;
+}
+
+/** The full path `command` resolves to on `PATH`, or null when it is absent. */
+function whichPath(command: string): string | null {
   const dirs = (process.env.PATH ?? '').split(path.delimiter).filter(Boolean);
   const suffixes =
     process.platform === 'win32' ? (process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';') : [''];
-  return dirs.some((dir) =>
-    suffixes.some((suffix) => fs.existsSync(path.join(dir, command + suffix))),
-  );
+  for (const dir of dirs) {
+    for (const suffix of suffixes) {
+      const candidate = path.join(dir, command + suffix);
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  }
+  return null;
 }
 
 /** Blocker for spawning the real compiler, or null when CL.EXE can run. */
@@ -50,13 +59,21 @@ export const describeWithToolchain = describe.skipIf(blocker !== null);
  * directly; a Windows host has neither shebang handling nor an exec bit for
  * `execFile`, and raises EFTYPE, so there node runs the script and the fixture
  * path rides in the argument list.
+ *
+ * `node` is taken from `PATH` rather than from `process.execPath`: the suite is
+ * launched with Bun, and the Bun binary does not run the fixture on a Windows
+ * host, so the markers the timing tests assert on are never written. A missing
+ * `node` is reported rather than papered over, because the same silence would
+ * return.
  */
 export function spyCompiler(script: string): {
   clPath: string;
   additionalFlags: string[];
 } {
   if (process.platform === 'win32') {
-    return { clPath: process.execPath, additionalFlags: [script] };
+    const node = whichPath('node');
+    if (node === null) throw new Error('node is not on PATH; the fixture scripts need it');
+    return { clPath: node, additionalFlags: [script] };
   }
   return { clPath: script, additionalFlags: [] };
 }

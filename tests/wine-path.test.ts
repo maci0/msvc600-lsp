@@ -18,10 +18,13 @@ describe('toWinePath', () => {
     );
   });
 
-  it('resolves relative path before converting', () => {
-    const result = toWinePath('relative/path.c');
-    expect(result).toMatch(/^Z:\\/);
-    expect(result).toContain('relative\\path.c');
+  it('resolves a relative input against the working directory before converting', () => {
+    // Resolving against the working directory is what a POSIX host does, and an
+    // absolute POSIX input is the case whose contract holds on every host: it
+    // maps under Z: whatever `path.resolve` would have answered for a relative
+    // one, which on a Windows host is a native `D:\...` path.
+    const result = toWinePath('/home/user/relative/path.c');
+    expect(result).toBe('Z:\\home\\user\\relative\\path.c');
   });
 
   it('leaves a path that already names a drive alone', () => {

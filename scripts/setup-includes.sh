@@ -96,17 +96,43 @@ copy_as() {
     done
 }
 
+# Whether the destination filesystem folds case. On such a filesystem the extra
+# spellings are the same directory entry, so a copy under a second spelling can
+# overwrite the source path or fail outright; one spelling already resolves every
+# #include, which is the whole point of the overlay.
+dest_folds_case() {
+    local probe="$DEST/.case-probe-$$"
+    printf 'probe\n' >"$probe"
+    if [ -e "${probe%?}A" ]; then
+        rm -f -- "$probe"
+        return 0
+    fi
+    rm -f -- "$probe"
+    return 1
+}
+
 # Copy $1 into $2 under its own name plus its lower- and upper-case spellings.
-# Every name is written even when it duplicates the source, so the overlay
-# mirrors the case-insensitive layout CL.EXE expects.
+# Every name is written when the filesystem keeps case apart, so the overlay
+# mirrors the layout CL.EXE expects on the Linux filesystem the overlay is for.
 copy_variants() {
     local src=$1 dest_dir=$2
     local base lower upper
     base=$(basename "$src")
+    if [ "$CASE_FOLDING" = yes ]; then
+        copy_as "$src" "$dest_dir" "$base"
+        return
+    fi
     lower=$(printf '%s' "$base" | tr '[:upper:]' '[:lower:]')
     upper=$(printf '%s' "$base" | tr '[:lower:]' '[:upper:]')
     copy_as "$src" "$dest_dir" "$base" "$lower" "$upper"
 }
+
+if dest_folds_case; then
+    CASE_FOLDING=yes
+    echo "Destination folds case; one spelling per file covers every #include."
+else
+    CASE_FOLDING=no
+fi
 
 # Copy all include files, skipping subdirs, which are handled below.
 echo "Copying INCLUDE files..."
@@ -124,7 +150,9 @@ for dir in "$MSVC_ROOT/INCLUDE/GL" "$MSVC_ROOT/INCLUDE/SYS" "$MSVC_ROOT/INCLUDE/
         for f in "$dir/"*; do
             [ -d "$f" ] && continue
             copy_variants "$f" "$DEST/include/$base"
-            copy_variants "$f" "$DEST/include/$lower"
+            if [ "$CASE_FOLDING" != yes ]; then
+                copy_variants "$f" "$DEST/include/$lower"
+            fi
         done
     fi
 done
@@ -149,8 +177,12 @@ for pair in $STL_MAP; do
     # headers from a previous run's leftovers, which no removal from the
     # source tree can ever reclaim.
     if [ -f "$MSVC_ROOT/INCLUDE/$truncated" ]; then
-        full_upper=$(printf '%s' "$full" | tr '[:lower:]' '[:upper:]')
-        copy_as "$MSVC_ROOT/INCLUDE/$truncated" "$DEST/include" "$full" "$full_upper"
+        if [ "$CASE_FOLDING" = yes ]; then
+            copy_as "$MSVC_ROOT/INCLUDE/$truncated" "$DEST/include" "$full"
+        else
+            full_upper=$(printf '%s' "$full" | tr '[:lower:]' '[:upper:]')
+            copy_as "$MSVC_ROOT/INCLUDE/$truncated" "$DEST/include" "$full" "$full_upper"
+        fi
         echo "  $truncated -> $full"
     fi
 done

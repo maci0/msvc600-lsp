@@ -91,9 +91,12 @@ describe('setup-includes.sh', () => {
     runSetup(fixture);
     expect(fs.existsSync(path.join(fixture.dest, 'include', 'ALGORITHM'))).toBe(true);
 
+    // On a case-folding destination the overlay holds one spelling, because the
+    // two names are one directory entry there; removing both would be an ENOENT
+    // for the spelling that was never written.
     fs.rmSync(path.join(fixture.msvc, 'INCLUDE', 'ALGRITHM'));
-    fs.rmSync(path.join(fixture.dest, 'include', 'algorithm'));
-    fs.rmSync(path.join(fixture.dest, 'include', 'ALGORITHM'));
+    fs.rmSync(path.join(fixture.dest, 'include', 'algorithm'), { force: true });
+    fs.rmSync(path.join(fixture.dest, 'include', 'ALGORITHM'), { force: true });
 
     runSetup(fixture);
     // A rerun reads the truncated header from the MSVC tree, so removing the
