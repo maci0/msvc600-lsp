@@ -30,7 +30,7 @@ const DIAG_REGEX =
 const CONTINUATION_INDENT = /^(?: {8,}|\t)/;
 
 /** LSP `uinteger` max value (2^31 - 1), used for "end of line" positions. */
-const LSP_UINT_MAX = 2147483647;
+export const LSP_UINT_MAX = 2147483647;
 
 /**
  * Parses raw CL.EXE stdout+stderr into structured diagnostics.

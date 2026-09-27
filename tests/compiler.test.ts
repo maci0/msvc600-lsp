@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
+import { randomUUID } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -9,6 +10,10 @@ import {
   stripByteOrderMark,
   createTempSourcePath,
   sweepStaleTempFiles,
+  createTempSource,
+  DocumentTooLargeError,
+  MAX_SOURCE_BYTES,
+  MAX_CONCURRENT_CHECKS,
 } from '../src/compiler';
 import { Msvc6Config } from '../src/config';
 import { CL_EXE, MSVC_ROOT, describeWithToolchain } from './helpers/toolchain';
@@ -354,3 +359,96 @@ describe('sweepStaleTempFiles', () => {
     }
   });
 });
+
+describe('createTempSource', () => {
+  const created: string[] = [];
+
+  afterEach(() => {
+    for (const p of created.splice(0)) {
+      try {
+        fs.unlinkSync(p);
+      } catch {
+        // already gone
+      }
+    }
+  });
+
+  it('writes the content to a fresh file the caller owns', () => {
+    const tempFile = createTempSource('int main(void) { return 0; }\n', '.c');
+    created.push(tempFile);
+    expect(fs.readFileSync(tempFile, 'utf-8')).toBe('int main(void) { return 0; }\n');
+  });
+
+  it('strips a leading BOM so the file starts at the first declaration', () => {
+    const tempFile = createTempSource('\ufeffint main(void) { return 0; }\n', '.c');
+    created.push(tempFile);
+    expect(fs.readFileSync(tempFile, 'utf-8')).toBe('int main(void) { return 0; }\n');
+  });
+
+  it('creates the file readable by its owner only', () => {
+    const tempFile = createTempSource('int x;\n', '.c');
+    created.push(tempFile);
+    expect(fs.statSync(tempFile).mode & 0o777).toBe(0o600);
+  });
+
+  it('refuses content over the syntax-check size limit, leaving no file behind', () => {
+    const before = fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('msvc6_lsp_')).length;
+    const oversized = 'a'.repeat(MAX_SOURCE_BYTES + 1);
+    expect(() => createTempSource(oversized, '.c')).toThrow(DocumentTooLargeError);
+    const after = fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('msvc6_lsp_')).length;
+    expect(after).toBe(before);
+  });
+});
+
+describe('syntaxCheck concurrency', () => {
+  it.runIf(process.platform !== 'win32')(
+    'runs at most MAX_CONCURRENT_CHECKS children at a time',
+    async () => {
+      const cfg = {
+        ...testConfig(),
+        useWine: false,
+        clPath: path.join(FIXTURES, 'slow_compiler.mjs'),
+      };
+      const source = path.join(FIXTURES, 'valid.c');
+      const trace = path.join(os.tmpdir(), `msvc6_lsp_trace_${randomUUID()}`);
+      process.env.MSVC6_TEST_TRACE = trace;
+
+      try {
+        const checks = MAX_CONCURRENT_CHECKS * 2;
+        const started = Date.now();
+        await Promise.all(Array.from({ length: checks }, () => syntaxCheck(cfg, source)));
+        const elapsed = Date.now() - started;
+
+        // The cap is a ceiling: staggered spawns can leave a slot briefly idle,
+        // so peak overlap is at most the cap and never all eight at once.
+        expect(peakConcurrency(trace)).toBeLessThanOrEqual(MAX_CONCURRENT_CHECKS);
+        // Each check holds its slot for 150 ms, so two waves cannot finish in
+        // less than 300 ms even when the slots are saturated.
+        expect(elapsed).toBeGreaterThanOrEqual(250);
+        expect(fs.readFileSync(trace, 'utf-8').trim().split('\n')).toHaveLength(2 * checks);
+      } finally {
+        delete process.env.MSVC6_TEST_TRACE;
+        fs.rmSync(trace, { force: true });
+      }
+    },
+  );
+});
+
+/** Highest number of checks running at the same time, from the fixture's markers. */
+function peakConcurrency(traceFile: string): number {
+  const events = fs
+    .readFileSync(traceFile, 'utf-8')
+    .trim()
+    .split('\n')
+    .map((line) => line.split(' '))
+    .map(([kind, nanos]) => ({ kind, at: Number(nanos) }))
+    .sort((a, b) => a.at - b.at);
+
+  let running = 0;
+  let peak = 0;
+  for (const { kind } of events) {
+    running += kind === 'start' ? 1 : -1;
+    peak = Math.max(peak, running);
+  }
+  return peak;
+}

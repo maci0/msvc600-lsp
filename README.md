@@ -81,7 +81,7 @@ src/
 
 **Key design decisions:**
 
-- **Temp files + abort controllers**: Each validation writes to a unique temp file and tracks an `AbortController`. New edits abort stale in-flight checks, and a startup sweep removes scratch files left behind by a crashed run.
+- **Temp files + abort controllers**: Each validation writes to a unique temp file and tracks an `AbortController`. New edits abort stale in-flight checks, and a startup sweep removes scratch files left behind by a crashed run. The file is created exclusively with mode `0600`, so a file or symlink another local user planted at that path is never written through.
 - **Validation generations**: A process-wide counter hands each validation a number that is never reused. A result is published only while its number is still the newest one for its URI, so a check that finishes late, or one belonging to a document that was closed and reopened, is discarded.
 - **Security boundary**: Runtime config changes cannot touch `additionalFlags` or the executable paths, which are fixed at initialization. That limits a notification to include paths and warning level; it does not constrain what the client sends at startup.
 
@@ -99,6 +99,8 @@ src/
 The open buffer is checked as a standalone translation unit, so a header that relies on types or include guards supplied by a `.c` file reports errors a real build would not.
 
 Diagnostics are line-scoped: each one spans columns 0 to the end of the reported line, because CL.EXE gives no column numbers for these messages. A check is killed after 30 s, and output past 1 MiB is truncated, which drops the tail of the diagnostic list.
+
+At most four `CL.EXE` children run at once; the rest queue, so a large revalidation after a settings change cannot spawn a process per open document. Buffers above 8 MiB are not written to the temp directory at all, and the editor shows a single `msvc6-too-large` note in their place.
 
 ## Development
 

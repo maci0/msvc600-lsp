@@ -32,14 +32,16 @@ if [ ! -x "$CL_EXE" ] && [ ! -f "$CL_EXE" ]; then
     fail "MSVC 6.0 at VC/VC98/BIN/CL.EXE" "copy the MSVC 6.0 tree into VC/VC98 (it is not in git)"
 fi
 
-uname_s=$(uname -s)
-if [[ "$uname_s" != MINGW* && "$uname_s" != CYGWIN* ]]; then
+case "$(uname -s)" in
+MINGW* | CYGWIN*) ;;
+*)
     if ! command -v wine >/dev/null 2>&1; then
         fail "wine" "install Wine, or set useWine=false and use a native Windows CL.EXE"
     elif [ ! -d "$OVERLAY_DIR/include" ]; then
         fail "case-insensitive include overlay at $OVERLAY_DIR" "run 'bun run setup'"
     fi
-fi
+    ;;
+esac
 
 if [ "$failures" -gt 0 ]; then
     echo

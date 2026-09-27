@@ -6,6 +6,8 @@ import {
   InitializeResult,
   TextDocumentSyncKind,
   DidChangeConfigurationNotification,
+  Diagnostic,
+  DiagnosticSeverity,
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { URI } from 'vscode-uri';
@@ -24,8 +26,11 @@ import {
   stripByteOrderMark,
   createTempSourcePath,
   sweepStaleTempFiles,
+  DocumentTooLargeError,
+  MAX_SOURCE_BYTES,
 } from './compiler';
-import { parseDiagnostics, toLspDiagnostics } from './diagnostics';
+import { parseDiagnostics, toLspDiagnostics, LSP_UINT_MAX } from './diagnostics';
+import { sanitizeForLog } from './logging';
 import { ValidationSequencer, ValidationHandle } from './validation-state';
 import { TaskQueue } from './task-queue';
 
@@ -57,6 +62,11 @@ const MAX_CONCURRENT_CHECKS = 2;
  */
 const validationQueue = new TaskQueue(MAX_CONCURRENT_CHECKS);
 
+/** Reports a caught error to the client log with control characters removed. */
+function logValidationError(context: string, e: unknown): void {
+  connection.console.error(sanitizeForLog(`${context}: ${String(e)}`));
+}
+
 connection.onInitialize((params: InitializeParams): InitializeResult => {
   const capabilities = params.capabilities;
   hasConfigurationCapability = !!(
@@ -82,7 +92,7 @@ connection.onInitialized(() => {
   if (hasConfigurationCapability) {
     void connection.client.register(DidChangeConfigurationNotification.type, undefined).then(
       undefined,
-      (e) => connection.console.error(`Failed to register config change watcher: ${String(e)}`),
+      (e) => logValidationError('Failed to register config change watcher', e),
     );
   }
 });
@@ -105,6 +115,14 @@ connection.onDidChangeConfiguration((change) => {
   // A client may re-send the settings it already holds. Re-checking every open
   // document would spawn one CL.EXE per document for no change in the inputs.
   if (runtimeConfigEquals(previous, config)) return;
+
+  // A client that repoints includePaths controls which headers every open
+  // file is preprocessed against, so the change is recorded.
+  connection.console.info(
+    sanitizeForLog(
+      `msvc6 configuration changed: includePaths=${config.includePaths.length} warnLevel=${config.warnLevel}`,
+    ),
+  );
 
   for (const t of pendingValidations.values()) clearTimeout(t);
   pendingValidations.clear();
@@ -222,9 +240,19 @@ async function runValidation(
     // A newer edit aborted this one while it sat in the queue.
     if (signal.aborted) return;
 
-    fs.writeFileSync(tempFile, stripByteOrderMark(content), {
+    const body = stripByteOrderMark(content);
+    const byteLength = Buffer.byteLength(body, 'utf-8');
+    if (byteLength > MAX_SOURCE_BYTES) {
+      throw new DocumentTooLargeError(byteLength);
+    }
+
+    // The create is exclusive (`wx`): a path already taken in the shared temp
+    // directory is an error rather than something to truncate, so a file or
+    // symlink planted by another local user is never written through.
+    fs.writeFileSync(tempFile, body, {
       encoding: 'utf-8',
       mode: 0o600,
+      flag: 'wx',
     });
 
     const result = await syntaxCheck(config, tempFile, { signal });
@@ -234,6 +262,12 @@ async function runValidation(
     const parsed = parseDiagnostics(result.rawOutput);
     connection.sendDiagnostics({ uri, diagnostics: toLspDiagnostics(parsed, tempFile) });
   } catch (e) {
+    if (e instanceof DocumentTooLargeError) {
+      if (handle.isCurrent()) {
+        connection.sendDiagnostics({ uri, diagnostics: [tooLargeDiagnostic(e)] });
+      }
+      return;
+    }
     if (signal.aborted) return;
     if (handle.isCurrent()) {
       connection.sendDiagnostics({ uri, diagnostics: [] });
@@ -246,6 +280,20 @@ async function runValidation(
       // Temp file may already be gone or was never created.
     }
   }
+}
+
+/** Tells the user why a buffer was not checked, instead of leaving it silently unvalidated. */
+function tooLargeDiagnostic(error: DocumentTooLargeError): Diagnostic {
+  return {
+    range: {
+      start: { line: 0, character: 0 },
+      end: { line: 0, character: LSP_UINT_MAX },
+    },
+    severity: DiagnosticSeverity.Information,
+    code: 'msvc6-too-large',
+    source: 'msvc6',
+    message: `Not syntax-checked: ${error.message}`,
+  };
 }
 
 documents.listen(connection);
