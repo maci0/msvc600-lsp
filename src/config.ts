@@ -94,8 +94,7 @@ export function defaultConfig(): Msvc6Config {
     warnLevel: 4,
     additionalFlags: [],
     wineExecutable: 'wine',
-    // CL.EXE diagnostics are ASCII-safe under Wine's UTF-8 console by default.
-    outputEncoding: 'utf8',
+    outputEncoding: DEFAULT_OUTPUT_ENCODING,
     useWine,
     checkTimeoutMs: DEFAULT_CHECK_TIMEOUT_MS,
     maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,

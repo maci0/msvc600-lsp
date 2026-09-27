@@ -43,14 +43,15 @@ const util_1 = require("util");
 const config_1 = require("./config");
 const encoding_1 = require("./encoding");
 const wine_path_1 = require("./wine-path");
-const tempfile_1 = require("./tempfile");
 const concurrency_1 = require("./concurrency");
+const tempfile_1 = require("./tempfile");
 /**
  * Concurrent CL.EXE children allowed at once. Each one is a heavyweight process
  * (a full Wine services startup on non-Windows), so the number is kept at the
  * parallelism a developer machine absorbs; the rest queue rather than dropping.
- * The server schedules through the same number, so the two layers of the
- * pipeline agree on one limit.
+ * The server's task queue happens to admit the same number, but the cap is
+ * this function's own contract: a caller outside that queue still gets a
+ * bounded number of children.
  */
 exports.MAX_CONCURRENT_CHECKS = 2;
 /** Wall-clock limit for one CL.EXE run before the process is killed. */

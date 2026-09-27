@@ -159,7 +159,6 @@ src/
 ├── diagnostics.ts       # MSVC output parser → LSP Diagnostic conversion
 ├── encoding.ts          # Source preparation: BOM strip, lone surrogates, UTF-8 bytes
 ├── logging.ts           # Control-character stripping for the client log
-├── scheduler.ts         # Debounce timer boundary (real timer, or a stepped one in simulation)
 ├── server.ts            # LSP server lifecycle, debouncing, abort handling
 ├── task-queue.ts        # Bounded per-URI cancellation queue for validations
 ├── tempfile.ts          # Scratch-source boundary: staging, 0600 writes, stale-file sweep
@@ -170,7 +169,6 @@ src/
 **Key design decisions:**
 
 - **Temp files + abort controllers**: Each validation writes to a unique temp file and tracks an `AbortController`. New edits abort stale in-flight checks, and a startup sweep removes scratch files left behind by a crashed run. The file is created exclusively with mode `0600`, so a file or symlink another local user planted at that path is never written through.
-- **Nondeterministic edges are injected**: Disk writes go through `TempFileStore` and the debounce goes through `Scheduler`, so a run can be replayed from a recorded call sequence with reproducible file names. Production keeps `crypto.randomUUID` names and `0o600` files; a simulation supplies its own store and scheduler.
 - **Validation generations**: A process-wide counter hands each validation a number that is never reused. A result is published only while its number is still the newest one for its URI, so a check that finishes late, or one belonging to a document that was closed and reopened, is discarded.
 - **Security boundary**: Runtime config changes cannot touch `additionalFlags` or the executable paths, which are fixed at initialization. That limits a notification to include paths and warning level; it does not constrain what the client sends at startup.
 

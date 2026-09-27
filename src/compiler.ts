@@ -4,23 +4,24 @@ import { TextDecoder } from 'util';
 import { Msvc6Config, CPP_EXTENSIONS, C_EXTENSIONS } from './config';
 import { prepareSourceText } from './encoding';
 import { toWinePath } from './wine-path';
-import { TempFileStore, createSystemTempFileStore } from './tempfile';
 import { Semaphore } from './concurrency';
-
-/**
- * Concurrent CL.EXE children allowed at once. Each one is a heavyweight process
- * (a full Wine services startup on non-Windows), so the number is kept at the
- * parallelism a developer machine absorbs; the rest queue rather than dropping.
- * The server schedules through the same number, so the two layers of the
- * pipeline agree on one limit.
- */
-export const MAX_CONCURRENT_CHECKS = 2;
+import { createSystemTempFileStore, TempFileStore } from './tempfile';
 
 /** Options for the entry points that stage document text on disk. */
 export interface TempFileOptions {
   /** Filesystem boundary to write through. Defaults to the real temp directory. */
   store?: TempFileStore;
 }
+
+/**
+ * Concurrent CL.EXE children allowed at once. Each one is a heavyweight process
+ * (a full Wine services startup on non-Windows), so the number is kept at the
+ * parallelism a developer machine absorbs; the rest queue rather than dropping.
+ * The server's task queue happens to admit the same number, but the cap is
+ * this function's own contract: a caller outside that queue still gets a
+ * bounded number of children.
+ */
+export const MAX_CONCURRENT_CHECKS = 2;
 
 /** Wall-clock limit for one CL.EXE run before the process is killed. */
 export const COMPILE_TIMEOUT_MS = 30000;

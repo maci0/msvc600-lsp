@@ -1,18 +1,19 @@
 import { Msvc6Config } from './config';
 import { TempFileStore } from './tempfile';
-/**
- * Concurrent CL.EXE children allowed at once. Each one is a heavyweight process
- * (a full Wine services startup on non-Windows), so the number is kept at the
- * parallelism a developer machine absorbs; the rest queue rather than dropping.
- * The server schedules through the same number, so the two layers of the
- * pipeline agree on one limit.
- */
-export declare const MAX_CONCURRENT_CHECKS = 2;
 /** Options for the entry points that stage document text on disk. */
 export interface TempFileOptions {
     /** Filesystem boundary to write through. Defaults to the real temp directory. */
     store?: TempFileStore;
 }
+/**
+ * Concurrent CL.EXE children allowed at once. Each one is a heavyweight process
+ * (a full Wine services startup on non-Windows), so the number is kept at the
+ * parallelism a developer machine absorbs; the rest queue rather than dropping.
+ * The server's task queue happens to admit the same number, but the cap is
+ * this function's own contract: a caller outside that queue still gets a
+ * bounded number of children.
+ */
+export declare const MAX_CONCURRENT_CHECKS = 2;
 /** Wall-clock limit for one CL.EXE run before the process is killed. */
 export declare const COMPILE_TIMEOUT_MS = 30000;
 /** Cap on captured stdout and stderr, per stream. */

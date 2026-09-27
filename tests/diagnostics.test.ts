@@ -233,5 +233,12 @@ describe('toLspDiagnostics', () => {
     const lsp = toLspDiagnostics(parsed, '/tmp/test.c');
     expect(lsp).toHaveLength(1);
   });
+
+  it('matches a decomposed spelling of a path the editor sends composed', () => {
+    const composed = '/tmp/İstanbul/test.c';
+    const decomposed = composed.normalize('NFD');
+    const lsp = toLspDiagnostics([makeParsed({ file: decomposed })], composed);
+    expect(lsp).toHaveLength(1);
+  });
 });
 
