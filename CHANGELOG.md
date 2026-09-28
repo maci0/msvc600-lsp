@@ -4,8 +4,21 @@ All notable changes to `msvc600-lsp` are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-The package is at `0.1.0`, below `1.0.0`, so a release may carry breaking changes to the
+The package is at `0.2.0`, below `1.0.0`, so a release may carry breaking changes to the
 LSP surface.
+
+## [0.2.0] - 2026-09-28
+
+### Fixed
+
+- The include overlay runs under bash 3.2. The STL alias table is a fixed list, not
+  `declare -A`, which macOS `/bin/bash` does not have.
+- On a case-folding destination the overlay writes one spelling per file. A second
+  spelling is the same directory entry, and removing one left the other missing.
+- `toWinePath` maps a resolved path that does not name a drive onto `Z:`. On Windows a
+  relative input resolves to a native drive path and stays native.
+- On Windows a `.cmd` or `.bat` compiler path is started through the shell. `CL.EXE` is
+  still started directly.
 
 ## [0.1.0] - 2026-09-27
 
