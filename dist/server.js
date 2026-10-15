@@ -54,8 +54,39 @@ const cli_1 = require("./cli");
 // connection, which would abort with a stack trace on stdout-adjacent paths and
 // exit 1 whatever the caller asked for.
 (0, cli_1.runCli)();
-const connection = (0, node_1.createConnection)(node_1.ProposedFeatures.all);
+let shutdownReceived = false;
+/** Method a request is rewritten to after shutdown, so the reply is InvalidRequest. */
+const AFTER_SHUTDOWN = 'msvc600-lsp/shutdown-rejected';
+/**
+ * Set once the queue exists. `$/cancelRequest` is swallowed by the library
+ * before a notification handler runs, so the message strategy is the hook.
+ * Push diagnostics have no request id, so any unmatched cancel aborts the
+ * checks that are running. Assigned before listen().
+ */
+let cancelInFlightDiagnostics = () => { };
+const connection = (0, node_1.createConnection)(node_1.ProposedFeatures.all, {
+    messageStrategy: {
+        handleMessage(message, next) {
+            const candidate = message;
+            if (candidate.method === '$/cancelRequest') {
+                cancelInFlightDiagnostics();
+            }
+            else if (shutdownReceived &&
+                (typeof candidate.id === 'number' || typeof candidate.id === 'string') &&
+                typeof candidate.method === 'string') {
+                candidate.method = AFTER_SHUTDOWN;
+            }
+            else if (candidate.method === 'shutdown') {
+                shutdownReceived = true;
+            }
+            next(message);
+        },
+    },
+});
 exports.connection = connection;
+connection.onRequest(AFTER_SHUTDOWN, () => {
+    return new node_1.ResponseError(node_1.ErrorCodes.InvalidRequest, 'Request received after shutdown');
+});
 const documents = new node_1.TextDocuments(vscode_languageserver_textdocument_1.TextDocument);
 exports.documents = documents;
 // Precedence: defaults < MSVC600_* environment < initializationOptions. The
@@ -76,6 +107,12 @@ const validationDebouncer = (0, debounce_1.createDebouncer)(DEBOUNCE_MS);
  * previous one, so a superseded edit never reaches the compiler.
  */
 const validationQueue = new task_queue_1.TaskQueue(compiler_1.MAX_CONCURRENT_CHECKS, (e) => logValidationError('Validation task rejected', e));
+cancelInFlightDiagnostics = () => {
+    validationDebouncer.cancelAll();
+    for (const document of documents.all()) {
+        validationQueue.cancel(document.uri);
+    }
+};
 /**
  * Filesystem boundary for scratch sources. One store for the process, so a
  * check stages through the same object that later removes the file and the

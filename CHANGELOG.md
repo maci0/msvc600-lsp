@@ -4,8 +4,14 @@ All notable changes to `msvc600-lsp` are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-The package is at `0.3.0`, below `1.0.0`, so a release may carry breaking changes to the
+The package is at `0.3.1`, below `1.0.0`, so a release may carry breaking changes to the
 LSP surface.
+
+## [0.3.1] - 2026-10-15
+
+### Fixed
+
+- The published `dist/server.js` matches the 0.3.0 source. The 0.3.0 tag shipped the previous build, so `msvc600-lsp schema` was absent from the binary the package runs.
 
 ## [0.3.0] - 2026-10-15
 
