@@ -58,12 +58,23 @@ Options:
       --stdio           communicate over stdin/stdout
       --node-ipc        communicate over the Node IPC channel
       --socket=<port>   connect to a TCP server on <port>
+      schema [command]  print the clispec 0.3 document and exit
+  -o, --output=<format> auto, text, or json
   -h, --help            print this help and exit
   -V, --version         print the version and exit
 ```
 
+`schema` prints one JSON document and exits 0. It does not open Wine and it does not read
+configuration. `schema serve` keeps that command; an unknown path leaves the command list empty.
+The document says `serve` is non-idempotent and opaque (`application/vscode-jsonrpc`): the process
+compiles buffers and does not edit sources. `schema`, `help`, and `version` are read-only.
+
+`-o` / `--output` is `auto` (the default), `text`, or `json`. It applies to schema, help, version,
+and usage errors. schema is always JSON. `auto` is text on a terminal and JSON when stdout is not
+a terminal. While the server is running, `-o` is ignored and stdout is LSP frames only.
+
 `--help` also lists every `MSVC600_*` variable and ends with the running version, so it is the
-one command to read when setting a client up.
+one command to read when setting a client up. `help` and `version` are accepted as words too.
 
 The server has no default transport, so a bare `msvc600-lsp` is a usage error rather than a
 crash, and naming two transports is a usage error rather than a silent choice of the first.
@@ -71,8 +82,10 @@ crash, and naming two transports is a usage error rather than a silent choice of
 opened, because a bad port otherwise surfaces as a stack trace and exit 1. Exit codes: `0`
 success, `1` the server failed to start, `2` bad argument. `--help` and `--version` write to
 stdout; a usage error writes to stderr and leaves stdout empty, so a script capturing stdout never
-reads an error page as server output. Nothing else is configurable on the command line:
-configuration comes from the environment and from `initializationOptions`, described below.
+reads an error page as server output. With `-o json` that stderr is one line,
+`{"error":{"kind":"usage","message":"...","hint":"..."}}`. Nothing else is configurable on the
+command line: configuration comes from the environment and from `initializationOptions`, described
+below. No secrets are accepted on argv.
 
 The transport decides who is on the other end of the protocol, and only one of them is your
 editor. `--stdio` speaks to the process that launched the server. `--node-ipc` and `--socket`

@@ -13,6 +13,7 @@ interface LspMessage {
   id?: number;
   method?: string;
   result?: Record<string, unknown> | null;
+  error?: { code?: number; message?: string };
   params?: {
     uri?: string;
     diagnostics?: Array<{
@@ -114,20 +115,34 @@ function waitForMessages(
   });
 }
 
-function startServer(): ChildProcess {
+function startServer(extraEnv: NodeJS.ProcessEnv = {}): ChildProcess {
   const serverPath = path.resolve(__dirname, '..', 'dist', 'server.js');
   // process.execPath is the runtime already running the tests (node or bun),
   // so the suite does not depend on `node` being on PATH.
   return spawn(process.execPath, [serverPath, '--stdio'], {
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: { ...process.env, WINEDEBUG: '-all' },
+    env: { ...process.env, WINEDEBUG: '-all', ...extraEnv },
   });
 }
 
 function killServer(proc: ChildProcess | null): void {
-  if (proc && !proc.killed) {
+  if (!proc || proc.killed || proc.exitCode !== null) return;
+  try {
     proc.kill('SIGTERM');
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'ESRCH') throw e;
   }
+}
+
+function waitForExit(proc: ChildProcess, timeoutMs = 5000): Promise<number | null> {
+  if (proc.exitCode !== null) return Promise.resolve(proc.exitCode);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), timeoutMs);
+    proc.once('close', (code) => {
+      clearTimeout(timer);
+      resolve(code);
+    });
+  });
 }
 
 async function initServer(
@@ -458,14 +473,16 @@ describe('command line', () => {
   beforeAll(buildServer, 120000);
 
   it('prints help on stdout, exits 0, and writes nothing to stderr', async () => {
-    const result = await runCli(['--help']);
+    const result = await runCli(['-o', 'text', '--help']);
     expect(result.code).toBe(0);
     expect(result.stderr).toBe('');
     expect(result.stdout).toContain('Usage: msvc600-lsp [options]');
+    expect(result.stdout).toContain('schema');
+    expect(result.stdout.startsWith('{')).toBe(false);
   });
 
   it('prints the package version on stdout, exits 0', async () => {
-    const result = await runCli(['--version']);
+    const result = await runCli(['-o', 'text', '--version']);
     const manifest = JSON.parse(
       fs.readFileSync(path.join(PROJECT_ROOT, 'package.json'), 'utf-8'),
     ) as { version: string };
@@ -473,17 +490,244 @@ describe('command line', () => {
     expect(result.stdout.trim()).toBe(manifest.version);
   });
 
+  it('prints schema as JSON and exits 0 with no transport', async () => {
+    const result = await runCli(['schema']);
+    expect(result.code).toBe(0);
+    expect(result.stderr).toBe('');
+    const doc = JSON.parse(result.stdout) as {
+      clispec: string;
+      name: string;
+      version: string;
+      commands: Array<{ name: string; effects: string; output_kind?: string; media_type?: string }>;
+      errors: Array<{ kind: string; exit_code: number }>;
+      output: { piped: string };
+      global_args: unknown[];
+    };
+    expect(doc.clispec).toBe('0.3');
+    expect(doc.name).toBe('msvc600-lsp');
+    expect(doc.version).toMatch(/^\d+\.\d+\.\d+/);
+    expect(doc.output.piped).toBe('json');
+    expect(doc.global_args.length).toBeGreaterThan(0);
+    expect(doc.errors.some((error) => error.kind === 'usage' && error.exit_code === 2)).toBe(true);
+    const serve = doc.commands.find((command) => command.name === 'serve');
+    expect(serve).toMatchObject({
+      effects: 'non_idempotent',
+      output_kind: 'opaque',
+      media_type: 'application/vscode-jsonrpc',
+    });
+  });
+
+  it('prints version as one JSON document when -o json is set', async () => {
+    const result = await runCli(['-o', 'json', '--version']);
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(PROJECT_ROOT, 'package.json'), 'utf-8'),
+    ) as { version: string };
+    expect(result.code).toBe(0);
+    expect(result.stderr).toBe('');
+    expect(JSON.parse(result.stdout)).toEqual({ version: manifest.version });
+  });
+
   it('exits 2 on an unknown flag and keeps stdout clear of the error', async () => {
-    const result = await runCli(['--stdios']);
+    const result = await runCli(['-o', 'text', '--stdios']);
     expect(result.code).toBe(2);
     expect(result.stdout).toBe('');
     expect(result.stderr).toContain("unknown option '--stdios'");
   });
 
+  it('exits 2 with a usage envelope as the last stderr line when -o json is set', async () => {
+    const result = await runCli(['-o', 'json', '--stdios']);
+    expect(result.code).toBe(2);
+    expect(result.stdout).toBe('');
+    const lines = result.stderr.split('\n').filter((line) => line !== '');
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0]!)).toEqual({
+      error: {
+        kind: 'usage',
+        message: "msvc600-lsp: unknown option '--stdios'",
+        hint: "Try 'msvc600-lsp --help' for the full list of options.",
+      },
+    });
+  });
+
   it('exits 2 with a usage error when no transport is given', async () => {
-    const result = await runCli([]);
+    const result = await runCli(['-o', 'text']);
     expect(result.code).toBe(2);
     expect(result.stdout).toBe('');
     expect(result.stderr).toContain('no transport selected');
   });
+
+  it('writes no clispec envelope on stdout while serving, even with -o json', async () => {
+    const serverPath = path.resolve(__dirname, '..', 'dist', 'server.js');
+    const proc = spawn(process.execPath, [serverPath, '-o', 'json', '--stdio'], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    proc.stdout.on('data', (chunk) => {
+      stdout += String(chunk);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    killServer(proc);
+    await waitForExit(proc);
+    expect(stdout).toBe('');
+  });
+});
+
+describe('LSP lifecycle without the toolchain', () => {
+  beforeAll(buildServer, 120000);
+
+  afterEach(() => {
+    killServer(serverProcess);
+    serverProcess = null;
+  });
+
+  it('advertises only the text document sync it implements', async () => {
+    serverProcess = startServer();
+    const raw = await initServer(serverProcess, { useWine: false });
+    const response = raw as LspMessage;
+    expect(response.result?.capabilities).toEqual({
+      textDocumentSync: {
+        openClose: true,
+        change: 2,
+        save: { includeText: false },
+      },
+    });
+  });
+
+  it('exits 0 after shutdown then exit', async () => {
+    serverProcess = startServer();
+    await initServer(serverProcess, { useWine: false });
+    const id = sendRequest(serverProcess, 'shutdown');
+    const messages = await waitForMessages(
+      serverProcess,
+      1,
+      5000,
+      (m): boolean => isLspMessage(m) && m.id === id && m.method === undefined,
+    );
+    expect(messages.some((m) => isLspMessage(m) && m.id === id && m.error === undefined)).toBe(true);
+    const closed = waitForExit(serverProcess);
+    sendNotification(serverProcess, 'exit');
+    expect(await closed).toBe(0);
+  });
+
+  it('rejects a request after shutdown with InvalidRequest', async () => {
+    serverProcess = startServer();
+    await initServer(serverProcess, { useWine: false });
+
+    const before = sendRequest(serverProcess, 'textDocument/hover', {
+      textDocument: { uri: 'file:///tmp/none.c' },
+      position: { line: 0, character: 0 },
+    });
+    const beforeMsgs = await waitForMessages(
+      serverProcess,
+      1,
+      5000,
+      (m): boolean => isLspMessage(m) && m.id === before,
+    );
+    const beforeReply = beforeMsgs.find((m): m is LspMessage => isLspMessage(m) && m.id === before);
+    expect(beforeReply?.error?.code).toBe(-32601);
+
+    const shutdownId = sendRequest(serverProcess, 'shutdown');
+    await waitForMessages(
+      serverProcess,
+      1,
+      5000,
+      (m): boolean => isLspMessage(m) && m.id === shutdownId && m.method === undefined,
+    );
+
+    const after = sendRequest(serverProcess, 'textDocument/hover', {
+      textDocument: { uri: 'file:///tmp/none.c' },
+      position: { line: 0, character: 0 },
+    });
+    const afterMsgs = await waitForMessages(
+      serverProcess,
+      1,
+      5000,
+      (m): boolean => isLspMessage(m) && m.id === after,
+    );
+    const afterReply = afterMsgs.find((m): m is LspMessage => isLspMessage(m) && m.id === after);
+    expect(afterReply?.error?.code).toBe(-32600);
+    expect(afterReply?.error?.message).toContain('after shutdown');
+  });
+
+  it('clears diagnostics when a document is closed', async () => {
+    serverProcess = startServer();
+    await initServer(serverProcess, { useWine: false });
+    const uri = 'file:///tmp/notes.txt';
+    sendNotification(serverProcess, 'textDocument/didOpen', {
+      textDocument: { uri, languageId: 'plaintext', version: 1, text: 'not compiled\n' },
+    });
+    sendNotification(serverProcess, 'textDocument/didClose', { textDocument: { uri } });
+    const messages = await waitForMessages(
+      serverProcess,
+      1,
+      5000,
+      (m): boolean =>
+        isLspMessage(m) && m.method === 'textDocument/publishDiagnostics' && m.params?.uri === uri,
+    );
+    const cleared = messages.find(
+      (m): m is LspMessage =>
+        isLspMessage(m) && m.method === 'textDocument/publishDiagnostics' && m.params?.uri === uri,
+    );
+    expect(cleared?.params?.diagnostics).toEqual([]);
+  });
+
+  it.runIf(process.platform !== 'win32')(
+    'cancels an in-flight diagnostics run on $/cancelRequest',
+    async () => {
+      const pidfile = path.join(os.tmpdir(), `msvc600-cancel-${process.pid}-${Date.now()}`);
+      let pid = 0;
+      try {
+        serverProcess = startServer({ MSVC6_CANCEL_PIDFILE: pidfile });
+        await initServer(serverProcess, {
+          useWine: false,
+          clPath: path.join(FIXTURES, 'cancel_target.mjs'),
+        });
+        sendNotification(serverProcess, 'textDocument/didOpen', {
+          textDocument: {
+            uri: 'file:///tmp/test_cancel.c',
+            languageId: 'c',
+            version: 1,
+            text: 'int main(void) { return 0; }\n',
+          },
+        });
+        const started = Date.now();
+        while (Date.now() - started < 8000) {
+          if (fs.existsSync(pidfile)) {
+            const parsed = Number(fs.readFileSync(pidfile, 'utf8').trim());
+            if (Number.isInteger(parsed) && parsed > 0) {
+              pid = parsed;
+              break;
+            }
+          }
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        expect(pid).toBeGreaterThan(0);
+        sendNotification(serverProcess, '$/cancelRequest', { id: 99999 });
+        const killedAt = Date.now();
+        let dead = false;
+        while (Date.now() - killedAt < 3000) {
+          try {
+            process.kill(pid, 0);
+          } catch (e) {
+            if ((e as NodeJS.ErrnoException).code === 'ESRCH') {
+              dead = true;
+              break;
+            }
+            throw e;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        expect(dead).toBe(true);
+      } finally {
+        if (pid > 0) {
+          try {
+            process.kill(pid, 'SIGKILL');
+          } catch {
+            // Already gone, which is the pass.
+          }
+        }
+        fs.rmSync(pidfile, { force: true });
+      }
+    },
+  );
 });

@@ -9,6 +9,8 @@ import {
   DidChangeConfigurationNotification,
   Diagnostic,
   DiagnosticSeverity,
+  ErrorCodes,
+  ResponseError,
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { URI } from 'vscode-uri';
@@ -51,7 +53,43 @@ import { runCli } from './cli';
 // exit 1 whatever the caller asked for.
 runCli();
 
-const connection = createConnection(ProposedFeatures.all);
+let shutdownReceived = false;
+
+/** Method a request is rewritten to after shutdown, so the reply is InvalidRequest. */
+const AFTER_SHUTDOWN = 'msvc600-lsp/shutdown-rejected';
+
+/**
+ * Set once the queue exists. `$/cancelRequest` is swallowed by the library
+ * before a notification handler runs, so the message strategy is the hook.
+ * Push diagnostics have no request id, so any unmatched cancel aborts the
+ * checks that are running. Assigned before listen().
+ */
+let cancelInFlightDiagnostics = (): void => {};
+
+const connection = createConnection(ProposedFeatures.all, {
+  messageStrategy: {
+    handleMessage(message, next) {
+      const candidate = message as { method?: unknown; id?: unknown };
+      if (candidate.method === '$/cancelRequest') {
+        cancelInFlightDiagnostics();
+      } else if (
+        shutdownReceived &&
+        (typeof candidate.id === 'number' || typeof candidate.id === 'string') &&
+        typeof candidate.method === 'string'
+      ) {
+        candidate.method = AFTER_SHUTDOWN;
+      } else if (candidate.method === 'shutdown') {
+        shutdownReceived = true;
+      }
+      next(message);
+    },
+  },
+});
+
+connection.onRequest(AFTER_SHUTDOWN, () => {
+  return new ResponseError(ErrorCodes.InvalidRequest, 'Request received after shutdown');
+});
+
 const documents = new TextDocuments(TextDocument);
 
 // Precedence: defaults < MSVC600_* environment < initializationOptions. The
@@ -80,6 +118,13 @@ const validationDebouncer = createDebouncer(DEBOUNCE_MS);
 const validationQueue = new TaskQueue(MAX_CONCURRENT_CHECKS, (e) =>
   logValidationError('Validation task rejected', e),
 );
+
+cancelInFlightDiagnostics = () => {
+  validationDebouncer.cancelAll();
+  for (const document of documents.all()) {
+    validationQueue.cancel(document.uri);
+  }
+};
 
 /**
  * Filesystem boundary for scratch sources. One store for the process, so a

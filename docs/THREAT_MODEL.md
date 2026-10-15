@@ -13,7 +13,7 @@ and who controls the command line that reaches `CL.EXE`.
 
 | # | Threat | Boundary | Impact | Existing control |
 |---|--------|----------|--------|------------------|
-| 1 | The command line selects the transport, and `--socket=<port>` dials a remote peer | argv to process | An unauthenticated remote host, or any local process that joins the IPC channel, gets the same authority as the editor: which binary runs and which flags it gets | None. Allowlisted transport flags only, port range checked (`src/cli.ts:105-127`) |
+| 1 | The command line selects the transport, and `--socket=<port>` dials a remote peer | argv to process | An unauthenticated remote host, or any local process that joins the IPC channel, gets the same authority as the editor: which binary runs and which flags it gets | None. Allowlisted flags only (transports, schema, help, version, `--output`), port range checked (`src/cli.ts`) |
 | 2 | Initialization options choose the executable and the flags | client to server (`initializationOptions`) | Arbitrary program execution and file writes as the editing user | None. Deliberate, and stated in `README.md:155` |
 | 3 | A hostile client sets `includePaths` to a directory it controls | client to server to `CL.EXE` | Header shadowing turns any open C/C++ file into attacker-chosen compile input | Type and range validation only (`src/config.ts:121-207`) |
 | 4 | Document text is written to a shared temp directory | server to filesystem | Source code exposure to other local users; temp leak on crash | `0o600` mode, UUID names, exclusive create (`src/tempfile.ts:11`, `src/tempfile.ts:90-95`); 8 MiB cap before the write (`src/tempfile.ts:27`, `src/tempfile.ts:45-51`); startup sweep of orphans (`src/tempfile.ts:206-231`) |
@@ -32,7 +32,7 @@ on the far end of them.
 
 | Entry point | Location | Source of input |
 |-------------|----------|-----------------|
-| Command line, parsed before the connection is built | `src/cli.ts:93-142`, called at `src/server.ts:47` | Whoever starts the process: transport flags, `--socket` port, `--help`, `--version` |
+| Command line, parsed before the connection is built | `src/cli.ts`, called at `src/server.ts` before the connection | Whoever starts the process: transport flags, `--socket` port, `schema`, `--help`, `--version`, `--output`. No configuration and no secrets |
 | Transport selection by the LSP library | `src/server.ts:49` | The same argv: `--stdio`, `--node-ipc`, `--socket=<port>` |
 | stdio JSON-RPC connection | `src/server.ts:49`, `src/server.ts:378` | The spawning editor, or anything that can write to the process's stdin |
 | TCP connection named by `--socket` | `src/cli.ts:116-127` | Whoever is listening at the address the launcher named, with no authentication and no TLS |
@@ -203,10 +203,10 @@ surface is the four `vscode-languageserver*` packages and `vscode-uri`
 
 Implemented:
 
-- The command line accepts only the three transport flags and the two
-  informational flags, and no configuration at all, so an argument cannot
-  redirect the toolchain: `src/cli.ts:93-142`, checked before the connection is
-  created (`src/server.ts:47`).
+- The command line accepts the three transport flags, `schema`, help, version,
+  and `--output`, and no configuration at all, so an argument cannot redirect
+  the toolchain. Checked before the connection is created (`src/cli.ts`,
+  `src/server.ts`).
 - A `--socket` port must be digits in 1-65535, rejected before the connection is
   opened: `src/cli.ts:116-124`.
 - Argument vectors instead of a shell, so config values cannot smuggle in shell
@@ -327,8 +327,9 @@ the compiler at all.
 `README.md` states the security-relevant claims this model depends on, and each
 was checked against the code:
 
-- The command line carries no configuration, and the three transports it does
-  accept are listed: `README.md:47-77`, matching `src/cli.ts:24-47`.
+- The command line carries no configuration. The transports, `schema`, and
+  `--output` are listed in the command-line section of `README.md`, matching
+  `src/cli.ts`.
 - Runtime configuration changes are limited to `includePaths` and `warnLevel`,
   and cannot inject `CL.EXE` flags, while startup configuration can: `README.md:155`,
   matching `src/server.ts:184-189` and `src/config.ts:121-207`.

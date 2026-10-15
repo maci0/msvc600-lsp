@@ -4,8 +4,22 @@ All notable changes to `msvc600-lsp` are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-The package is at `0.2.0`, below `1.0.0`, so a release may carry breaking changes to the
+The package is at `0.3.0`, below `1.0.0`, so a release may carry breaking changes to the
 LSP surface.
+
+## [0.3.0] - 2026-10-15
+
+### Added
+
+- `msvc600-lsp schema` prints one clispec 0.3 document and exits 0. It does not
+  start the server, open Wine, or read configuration. `schema <command>` keeps
+  that command and commands under it.
+- `-o` / `--output` accepts `auto`, `text`, or `json` for schema, help, version,
+  and usage errors. schema is always JSON. `auto` is text on a terminal and JSON
+  when stdout is not a terminal. `-o json` on a usage error writes one envelope
+  line to stderr, leaves stdout empty, and exits 2.
+- A request after `shutdown` is rejected with InvalidRequest. `$/cancelRequest`
+  aborts an in-flight syntax check. `exit` after `shutdown` still ends the process.
 
 ## [0.2.0] - 2026-09-28
 
