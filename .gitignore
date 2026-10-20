@@ -1,5 +1,4 @@
 node_modules/
-dist/
 coverage/
 
 # The MSVC 6.0 tree is proprietary and is not in git; see "Prerequisites" in the

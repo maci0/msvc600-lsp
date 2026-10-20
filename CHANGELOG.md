@@ -4,8 +4,15 @@ All notable changes to `msvc600-lsp` are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-The package is at `0.3.1`, below `1.0.0`, so a release may carry breaking changes to the
+The package is at `0.4.0`, below `1.0.0`, so a release may carry breaking changes to the
 LSP surface.
+
+## [0.4.0] - 2026-10-21
+
+### Fixed
+
+- Release tags now include every compiled module required by `dist/server.js`. A clean checkout of 0.3.1 could not start because modules such as `wine-path.js` and `cli.js` were missing.
+- Compiled output is no longer ignored, so new runtime modules are included with the existing tracked build artifacts.
 
 ## [0.3.1] - 2026-10-15
 
